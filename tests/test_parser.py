@@ -76,7 +76,10 @@ def test_occurs():
     """
     child = parse(cobol)[0].children[0]
     assert child.name == "TABLE-ITEM"
-    assert child.occurs == 10
+    assert child.occurs.max_occurs == 10
+    assert child.occurs.min_occurs == 10
+    assert child.occurs.depending_on is None
+    assert child.occurs.is_variable is False
 
 
 def test_usage_comp3_overrides_category():
@@ -171,6 +174,6 @@ def test_group_occurs():
     """
     order_lines = parse(cobol)[0].children[0]
     assert order_lines.name == "ORDER-LINES"
-    assert order_lines.occurs == 5
+    assert order_lines.occurs.max_occurs == 5
     assert order_lines.is_group is True
     assert len(order_lines.children) == 2

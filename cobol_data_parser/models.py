@@ -28,13 +28,33 @@ class PicClause:
 
 
 @dataclass
+class OccursClause:
+    """Represents an OCCURS clause — fixed or variable-length (ODO)."""
+    min_occurs: int
+    max_occurs: int
+    depending_on: Optional[str] = None  # None for fixed OCCURS
+
+    @property
+    def is_variable(self) -> bool:
+        return self.depending_on is not None
+
+    @classmethod
+    def fixed(cls, count: int) -> OccursClause:
+        return cls(min_occurs=count, max_occurs=count)
+
+    @classmethod
+    def variable(cls, min_count: int, max_count: int, depending_on: str) -> OccursClause:
+        return cls(min_occurs=min_count, max_occurs=max_count, depending_on=depending_on)
+
+
+@dataclass
 class DataItem:
     level: int
     name: str
     pic: Optional[PicClause] = None
     usage: Optional[str] = None
     redefines: Optional[str] = None
-    occurs: Optional[int] = None
+    occurs: Optional[OccursClause] = None
     children: list[DataItem] = field(default_factory=list)
 
     @property

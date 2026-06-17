@@ -19,11 +19,26 @@ from .parser import parse
     default=None,
     help="Force fixed-format (cols 1-72) or free-format parsing",
 )
-def main(input_file: str, output: str | None, indent: int, fixed: bool | None) -> None:
+@click.option(
+    "--copybook-dir",
+    "copybook_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Directory to search for copybooks (repeatable)",
+)
+def main(
+    input_file: str,
+    output: str | None,
+    indent: int,
+    fixed: bool | None,
+    copybook_dirs: tuple[str, ...],
+) -> None:
     """Convert COBOL DATA DIVISION to JSON.
 
     Reads COBOL source from INPUT_FILE (or stdin with -) and writes a JSON
     representation of the data structure to stdout or --output.
+
+    COPY statements are expanded when --copybook-dir is supplied.
     """
     try:
         if input_file == "-":
@@ -32,7 +47,7 @@ def main(input_file: str, output: str | None, indent: int, fixed: bool | None) -
             with open(input_file, encoding="utf-8") as f:
                 text = f.read()
 
-        items = parse(text, fixed_format=fixed)
+        items = parse(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
         result = to_json(items, indent=indent)
 
         if output:

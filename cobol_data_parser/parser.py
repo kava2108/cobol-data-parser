@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from .lexer import preprocess, split_data_items
-from .models import DataItem, PicCategory, PicClause
+from .models import DataItem, OccursClause, PicCategory, PicClause
 from .pic_parser import parse_pic
 
 _USAGE_MAP: dict[str, str] = {
@@ -24,7 +26,6 @@ _USAGE_MAP: dict[str, str] = {
     "POINTER": "POINTER",
 }
 
-# USAGE values that override PIC category
 _USAGE_CATEGORY: dict[str, PicCategory] = {
     "COMP": PicCategory.BINARY,
     "COMP-4": PicCategory.BINARY,
@@ -33,6 +34,48 @@ _USAGE_CATEGORY: dict[str, PicCategory] = {
     "COMP-3": PicCategory.PACKED_DECIMAL,
     "PACKED-DECIMAL": PicCategory.PACKED_DECIMAL,
 }
+
+
+def _parse_occurs(tokens: list[str], start: int) -> tuple[OccursClause | None, int]:
+    """Parse an OCCURS clause starting at tokens[start] (the token after 'OCCURS').
+
+    Returns (OccursClause, index-of-last-consumed-token).
+    """
+    i = start
+    if i >= len(tokens):
+        return None, i
+
+    try:
+        min_count = int(tokens[i])
+    except ValueError:
+        return None, i
+
+    max_count = min_count
+    depending_on: str | None = None
+
+    while i + 1 < len(tokens):
+        nxt = tokens[i + 1].upper()
+        if nxt == "TO":
+            i += 2
+            if i < len(tokens):
+                try:
+                    max_count = int(tokens[i])
+                except ValueError:
+                    pass
+        elif nxt == "TIMES":
+            i += 1
+        elif nxt == "DEPENDING":
+            i += 1
+            if i + 1 < len(tokens) and tokens[i + 1].upper() == "ON":
+                i += 2
+                if i < len(tokens):
+                    depending_on = tokens[i].upper()
+            break
+        else:
+            break
+
+    oc = OccursClause(min_occurs=min_count, max_occurs=max_count, depending_on=depending_on)
+    return oc, i
 
 
 def _parse_entry(entry: str) -> DataItem | None:
@@ -48,7 +91,7 @@ def _parse_entry(entry: str) -> DataItem | None:
     pic: PicClause | None = None
     usage: str | None = None
     redefines: str | None = None
-    occurs: int | None = None
+    occurs: OccursClause | None = None
 
     i = 2
     while i < len(tokens):
@@ -67,17 +110,7 @@ def _parse_entry(entry: str) -> DataItem | None:
                 redefines = tokens[i].upper()
 
         elif t == "OCCURS":
-            i += 1
-            if i < len(tokens):
-                try:
-                    occurs = int(tokens[i])
-                except ValueError:
-                    pass
-            # Skip TO <max> TIMES / TIMES
-            while i + 1 < len(tokens) and tokens[i + 1].upper() in ("TO", "TIMES"):
-                i += 1
-                if tokens[i].upper() == "TO" and i + 1 < len(tokens):
-                    i += 1  # skip max-value
+            occurs, i = _parse_occurs(tokens, i + 1)
 
         elif t == "USAGE":
             i += 1
@@ -94,7 +127,6 @@ def _parse_entry(entry: str) -> DataItem | None:
 
         i += 1
 
-    # USAGE can override the PIC category (e.g. COMP-3 → packed-decimal)
     if pic and usage and usage in _USAGE_CATEGORY:
         pic = PicClause(
             raw=pic.raw,
@@ -116,7 +148,7 @@ def _parse_entry(entry: str) -> DataItem | None:
 
 def _build_tree(flat: list[DataItem]) -> list[DataItem]:
     roots: list[DataItem] = []
-    stack: list[tuple[int, DataItem]] = []  # (level, item)
+    stack: list[tuple[int, DataItem]] = []
 
     for item in flat:
         if item.level in (1, 77):
@@ -137,10 +169,25 @@ def _build_tree(flat: list[DataItem]) -> list[DataItem]:
     return roots
 
 
-def parse(text: str, fixed_format: bool | None = None) -> list[DataItem]:
-    """Parse COBOL DATA DIVISION text and return top-level DataItems."""
+def parse(
+    text: str,
+    fixed_format: bool | None = None,
+    copybook_dirs: list[str | Path] | None = None,
+) -> list[DataItem]:
+    """Parse COBOL DATA DIVISION text and return top-level DataItems.
+
+    Args:
+        text: Raw COBOL source text (DATA DIVISION or full program).
+        fixed_format: True = fixed (cols 1-72), False = free, None = auto-detect.
+        copybook_dirs: Directories to search when expanding COPY statements.
+    """
     logical = preprocess(text, fixed_format=fixed_format)
     entries = split_data_items(logical)
+
+    if copybook_dirs:
+        from .copybook import expand_copies
+        dirs = [Path(d) for d in copybook_dirs]
+        entries = expand_copies(entries, dirs, fixed_format)
 
     flat: list[DataItem] = []
     for entry in entries:

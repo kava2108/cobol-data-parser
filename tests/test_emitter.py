@@ -75,15 +75,20 @@ def test_display_usage_omitted():
     assert "usage" not in field
 
 
-def test_redefines_in_output():
+def test_redefines_union_in_output():
     cobol = """
     01 WORK.
        05 ORIG PIC 9(5).
        05 ALT REDEFINES ORIG PIC X(5).
     """
     work = _parse_emit(cobol)["WORK"]
-    assert work["ALT"]["redefines"] == "ORIG"
-    assert work["ALT"]["type"] == "string"
+    # ALT is folded into ORIG's union; it must not appear as a sibling
+    assert "ALT" not in work
+    assert "union" in work["ORIG"]
+    alt = work["ORIG"]["union"][0]
+    assert alt["name"] == "ALT"
+    assert alt["type"] == "string"
+    assert alt["length"] == 5
 
 
 def test_elementary_occurs():

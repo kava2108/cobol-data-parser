@@ -67,8 +67,10 @@ def split_data_items(logical_lines: list[str]) -> list[str]:
             re.IGNORECASE,
         ):
             continue
-        # Must start with a valid level number
-        if not re.match(r"^\d{1,2}\s+\S", entry):
+        # Keep data items (level number) and COPY statements (for later expansion)
+        if not re.match(r"^\d{1,2}\s+\S", entry) and not re.match(
+            r"^COPY\s+\S", entry, re.IGNORECASE
+        ):
             continue
         entries.append(entry)
 

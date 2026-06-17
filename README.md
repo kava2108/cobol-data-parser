@@ -69,6 +69,9 @@ cobol-data-parser --fixed customer.cob
 
 # 自由形式を強制
 cobol-data-parser --free customer.cob
+
+# COPYBOOK ディレクトリを指定（複数指定可）
+cobol-data-parser --copybook-dir ./copybooks --copybook-dir ../shared customer.cob
 ```
 
 ### Python API
@@ -79,9 +82,10 @@ from cobol_data_parser import parse, emit, to_json
 with open("customer.cob") as f:
     text = f.read()
 
-items    = parse(text)      # list[DataItem]
-data     = emit(items)      # dict（JSON シリアライズ可能）
-json_str = to_json(items)   # str
+items    = parse(text)                              # list[DataItem]
+items    = parse(text, copybook_dirs=["./cpy"])     # COPYBOOK 展開あり
+data     = emit(items)                             # dict（JSON シリアライズ可能）
+json_str = to_json(items)                          # str
 ```
 
 ## 対応 COBOL 機能
@@ -110,8 +114,10 @@ json_str = to_json(items)   # str
 
 | 句 | 動作 |
 |---|---|
-| `REDEFINES` | `"redefines": "<対象フィールド名>"` をフィールドに付加 |
-| `OCCURS n TIMES` | `"occurs": n` を付加。グループ項目は `"fields"` エンベロープで包む |
+| `REDEFINES` | 元フィールドの `"union"` 配列にエイリアスとして折り畳む |
+| `OCCURS n TIMES` | 固定長テーブル。グループ項目は `"fields"` エンベロープで包む |
+| `OCCURS n TO m TIMES DEPENDING ON field` | 可変長テーブル（ODO）。`"occurs": {"min", "max", "depending_on"}` で表現 |
+| `COPY <name>` | `--copybook-dir` 指定時にインライン展開（`REPLACING` 対応） |
 | `FILLER` | 出力から除外 |
 | レベル 88（条件名） | 出力から除外 |
 | レベル 77（独立項目） | トップレベルのエントリとして出力 |
@@ -135,7 +141,7 @@ CLI の `--fixed` / `--free` オプション、または `parse()` の `fixed_fo
 { "type": "packed-decimal", "precision": 9, "scale": 2, "usage": "COMP-3" }
 ```
 
-### グループ項目（OCCURS / REDEFINES なし）
+### グループ項目
 
 ```json
 {
@@ -146,7 +152,7 @@ CLI の `--fixed` / `--free` オプション、または `parse()` の `fixed_fo
 }
 ```
 
-### OCCURS 付きグループ項目
+### OCCURS 付きグループ項目（固定長テーブル）
 
 ```json
 {
@@ -160,6 +166,60 @@ CLI の `--fixed` / `--free` オプション、または `parse()` の `fixed_fo
 }
 ```
 
+### OCCURS DEPENDING ON（可変長テーブル）
+
+```cobol
+05 ITEM-COUNT PIC 9(3).
+05 ITEMS OCCURS 1 TO 100 TIMES DEPENDING ON ITEM-COUNT.
+   10 ITEM-ID  PIC 9(5).
+```
+
+```json
+{
+  "ITEM-COUNT": { "type": "numeric", "length": 3 },
+  "ITEMS": {
+    "occurs": { "min": 1, "max": 100, "depending_on": "ITEM-COUNT" },
+    "fields": {
+      "ITEM-ID": { "type": "numeric", "length": 5 }
+    }
+  }
+}
+```
+
+### REDEFINES グラフ
+
+REDEFINES エイリアスは元フィールドの `"union"` 配列に折り畳まれます。
+兄弟フィールドとして独立して出現することはありません。
+
+```cobol
+05 AMOUNT-DISPLAY PIC X(8).
+05 AMOUNT-PACKED  REDEFINES AMOUNT-DISPLAY PIC S9(9)V99 COMP-3.
+05 AMOUNT-BINARY  REDEFINES AMOUNT-DISPLAY PIC S9(9) COMP.
+```
+
+```json
+{
+  "AMOUNT-DISPLAY": {
+    "type": "string",
+    "length": 8,
+    "union": [
+      { "name": "AMOUNT-PACKED", "type": "packed-decimal", "precision": 9, "scale": 2, "usage": "COMP-3" },
+      { "name": "AMOUNT-BINARY", "type": "binary", "length": 9, "usage": "COMP" }
+    ]
+  }
+}
+```
+
+### COPYBOOK 展開
+
+```bash
+# ディレクトリ内の .cpy / .cob / .CBL ファイルを検索して自動展開
+cobol-data-parser --copybook-dir ./copybooks main.cob
+```
+
+`REPLACING` 句（擬似テキスト `==...== BY ==...==` および単語置換）に対応しています。  
+ネストした COPY（コピーブック内の COPY）も再帰的に展開します。
+
 ## 開発
 
 ```bash
@@ -169,9 +229,6 @@ pytest
 
 ## FUTURE WORK
 
-- **COPYBOOK 展開** — `COPY` 文を解決して外部コピーブックをインライン展開してからパース。
-- **`OCCURS DEPENDING ON` 対応** — ODO ターゲットフィールドを参照する可変長テーブルのサポート。
-- **`REDEFINES` グラフ化** — 同一フィールドの全 REDEFINES エイリアスをユニオン型としてモデル化し、正確なストレージサイズ計算を実現。
 - **DB スキーマ生成** — `01` レベルレコードから SQL DDL（`CREATE TABLE`）を出力。
 - **TypeScript 型生成** — モダンバックエンドで直接使える `interface` / `type` 宣言を出力。
 - **OpenAPI コンポーネント生成** — REST API ドキュメント向けに `components/schemas` エントリを出力。
