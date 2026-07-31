@@ -55,6 +55,8 @@ class DataItem:
     usage: Optional[str] = None
     redefines: Optional[str] = None
     occurs: Optional[OccursClause] = None
+    byte_length: Optional[int] = None
+    offset: Optional[int] = None
     children: list[DataItem] = field(default_factory=list)
 
     @property

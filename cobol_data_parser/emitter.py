@@ -25,6 +25,10 @@ def _emit_elementary(item: DataItem) -> dict:
             node["precision"] = item.pic.precision
         if item.pic.scale is not None:
             node["scale"] = item.pic.scale
+    if item.offset is not None:
+        node["offset"] = item.offset
+    if item.byte_length is not None:
+        node["bytes"] = item.byte_length
     if item.usage and item.usage != "DISPLAY":
         node["usage"] = item.usage
     return node
@@ -67,6 +71,10 @@ def _emit_union_member(item: DataItem) -> dict:
     node: dict = {"name": item.name}
     if item.is_group:
         fields = _emit_group_children(item.children)
+        if item.offset is not None:
+            node["offset"] = item.offset
+        if item.byte_length is not None:
+            node["bytes"] = item.byte_length
         if item.occurs is not None:
             node["occurs"] = _occurs_value(item.occurs)
         node["fields"] = fields
@@ -82,7 +90,14 @@ def _emit_item_body(item: DataItem) -> dict:
     if item.is_group:
         fields = _emit_group_children(item.children)
         if item.occurs is not None:
-            return {"occurs": _occurs_value(item.occurs), "fields": fields}
+            node: dict = {}
+            if item.offset is not None:
+                node["offset"] = item.offset
+            if item.byte_length is not None:
+                node["bytes"] = item.byte_length
+            node["occurs"] = _occurs_value(item.occurs)
+            node["fields"] = fields
+            return node
         return fields
     else:
         node = _emit_elementary(item)

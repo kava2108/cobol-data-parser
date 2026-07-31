@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .layout import assign_offsets
 from .lexer import preprocess, split_data_items
 from .models import DataItem, OccursClause, PicCategory, PicClause
 from .pic_parser import parse_pic
+from .storage import compute_byte_length
 
 _USAGE_MAP: dict[str, str] = {
     "COMP": "COMP",
@@ -143,6 +145,7 @@ def _parse_entry(entry: str) -> DataItem | None:
         usage=usage,
         redefines=redefines,
         occurs=occurs,
+        byte_length=compute_byte_length(pic, usage),
     )
 
 
@@ -195,4 +198,6 @@ def parse(
         if item is not None:
             flat.append(item)
 
-    return _build_tree(flat)
+    roots = _build_tree(flat)
+    assign_offsets(roots)
+    return roots

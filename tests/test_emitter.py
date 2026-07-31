@@ -22,12 +22,14 @@ def test_exact_output_matches_spec():
     result = _parse_emit(cobol)
     assert result == {
         "CUSTOMER-REC": {
-            "CUST-ID": {"type": "numeric", "length": 5},
+            "CUST-ID": {"type": "numeric", "length": 5, "offset": 0, "bytes": 5},
             "CUST-NAME": {
-                "FIRST-NAME": {"type": "string", "length": 10},
-                "LAST-NAME": {"type": "string", "length": 10},
+                "FIRST-NAME": {"type": "string", "length": 10, "offset": 5, "bytes": 10},
+                "LAST-NAME": {"type": "string", "length": 10, "offset": 15, "bytes": 10},
             },
-            "BALANCE": {"type": "signed-decimal", "precision": 7, "scale": 2},
+            "BALANCE": {
+                "type": "signed-decimal", "precision": 7, "scale": 2, "offset": 25, "bytes": 9,
+            },
         }
     }
 
@@ -51,7 +53,7 @@ def test_88_level_excluded():
     """
     rec = _parse_emit(cobol)["MY-REC"]
     assert "STATUS" in rec
-    assert rec["STATUS"] == {"type": "numeric", "length": 2}
+    assert rec["STATUS"] == {"type": "numeric", "length": 2, "offset": 0, "bytes": 2}
 
 
 def test_packed_decimal_usage():
@@ -64,6 +66,7 @@ def test_packed_decimal_usage():
     assert amount["usage"] == "COMP-3"
     assert amount["precision"] == 9
     assert amount["scale"] == 2
+    assert amount["bytes"] == 6  # (9 + 2) digits -> floor(11/2) + 1
 
 
 def test_display_usage_omitted():
