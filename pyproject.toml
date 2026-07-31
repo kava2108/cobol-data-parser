@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cobol-data-parser"
-version = "0.2.0"
-description = "Parse COBOL DATA DIVISION and convert to JSON"
+version = "0.4.0"
+description = "Parse COBOL DATA DIVISION, convert to JSON/Markdown, and decode real records"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

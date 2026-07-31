@@ -74,12 +74,15 @@ cobol-data-parser --free customer.cob
 
 # COPYBOOK ディレクトリを指定（複数指定可）
 cobol-data-parser --copybook-dir ./copybooks --copybook-dir ../shared customer.cob
+
+# データ項目定義書（Markdown表）として出力
+cobol-data-parser --format markdown customer.cob
 ```
 
 ### Python API
 
 ```python
-from cobol_data_parser import parse, emit, to_json, decode_record, iter_records
+from cobol_data_parser import parse, emit, to_json, to_markdown_table, decode_record, iter_records
 
 with open("customer.cob") as f:
     text = f.read()
@@ -88,6 +91,7 @@ items    = parse(text)                              # list[DataItem]（offset/by
 items    = parse(text, copybook_dirs=["./cpy"])     # COPYBOOK 展開あり
 data     = emit(items)                             # dict（JSON シリアライズ可能）
 json_str = to_json(items)                          # str
+doc      = to_markdown_table(items)                # データ項目定義書（Markdown表）
 
 # 実データ（EBCDIC 等でエンコードされたバイト列）をデコード
 with open("customer.dat", "rb") as f:
@@ -271,6 +275,31 @@ cobol-data-parser --copybook-dir ./copybooks main.cob
 `REPLACING` 句（擬似テキスト `==...== BY ==...==` および単語置換）に対応しています。  
 ネストした COPY（コピーブック内の COPY）も再帰的に展開します。
 
+## データ項目定義書
+
+`--format markdown`（または `to_markdown_table()`）で、コピー本の物理レイアウトを
+Markdown 表として出力できます。JSON 出力（`emit()`）は API 消費者向けに FILLER や
+88レベルを除外しますが、こちらはレイアウト定義書として **すべてのバイトを説明する**
+ため、FILLER・レベル66（RENAMES）・レベル88（条件名）も含めて全項目を出力します。
+
+```bash
+cobol-data-parser --format markdown customer.cob
+```
+
+```markdown
+| Level | 項目名 | PIC | USAGE | 桁数 | バイト数 | オフセット | REDEFINES | OCCURS |
+|---|---|---|---|---|---|---|---|---|
+| 01 | CUSTOMER-REC |  |  |  | 34 | 0 |  |  |
+| 　　05 | CUST-ID | 9(5) |  | 5 | 5 | 0 |  |  |
+| 　　05 | CUST-NAME |  |  |  | 20 | 5 |  |  |
+| 　　　　10 | FIRST-NAME | X(10) |  |  | 10 | 5 |  |  |
+| 　　　　10 | LAST-NAME | X(10) |  |  | 10 | 15 |  |  |
+| 　　05 | BALANCE | S9(7)V99 |  | 7,2 | 9 | 25 |  |  |
+```
+
+階層はレベル列のインデント（全角スペース）で表現されます。オフセット/バイト数が
+静的に確定できないフィールド（OCCURS DEPENDING ON より後ろ、前述）は空欄になります。
+
 ## デコード（コーデック層）
 
 `parse()` で得た `DataItem` ツリー（offset/bytes 算出済み）を使って、実際のレコード
@@ -327,6 +356,8 @@ pytest
 
 ## FUTURE WORK
 
+- **プログラム仕様書生成** — PROCEDURE DIVISION を解析し、処理概要・IPO・ロジックを
+  文書化する。DATA DIVISION 専用の現パーサーとは別の解析基盤が必要な、大きめの機能。
 - **DB スキーマ生成** — `01` レベルレコードから SQL DDL（`CREATE TABLE`）を出力。
 - **TypeScript 型生成** — モダンバックエンドで直接使える `interface` / `type` 宣言を出力。
 - **OpenAPI コンポーネント生成** — REST API ドキュメント向けに `components/schemas` エントリを出力。
