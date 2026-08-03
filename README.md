@@ -9,10 +9,11 @@ COBOL モダナイゼーションの第一歩は、データ構造とロジッ�
   **PIC/USAGE から物理バイト長を算出し**、**各フィールドにバイトオフセットを付与した**上で、
   スキーマ生成・API 設計・LLM を用いた移行ワークフローで活用できる JSON 表現を出力します。
   さらに、そのオフセット情報を使って**実際の EBCDIC/COMP-3/バイナリのレコードをデコード**
-  し、逆に Python の値からレコードバイト列へ**エンコード**することもできます。
+  し、逆に Python の値からレコードバイト列へ**エンコード**することもできます。デコード後の
+  値の形をそのまま **SQL DDL / TypeScript / OpenAPI スキーマ**としても出力できます。
 - **`cobol-proc-parser`** — PROCEDURE DIVISION の SECTION・段落構造を読み取り、
-  `PERFORM` による**制御フローグラフ**と `CALL` による**プログラム間依存関係グラフ**を
-  JSON / Graphviz DOT / SQL / Python の各形式で出力します。
+  `PERFORM` による**制御フローグラフ**（`IF`/`EVALUATE` の分岐条件付き）と `CALL` による
+  **プログラム間依存関係グラフ**を JSON / Graphviz DOT / SQL / Python の各形式で出力します。
 
 ## 使用例
 
@@ -83,7 +84,20 @@ cobol-data-parser --copybook-dir ./copybooks --copybook-dir ../shared customer.c
 
 # データ項目定義書（Markdown表）として出力
 cobol-data-parser --format markdown customer.cob
+
+# SQL DDL（CREATE TABLE）として出力
+cobol-data-parser --format sql-ddl customer.cob
+
+# TypeScript interface として出力
+cobol-data-parser --format typescript customer.cob
+
+# OpenAPI components/schemas として出力
+cobol-data-parser --format openapi customer.cob
 ```
+
+`sql-ddl` / `typescript` / `openapi` は `emit()` の JSON メタデータ形状ではなく、
+`decode_record()` が実際に返す**デコード後の値の形**を反映します（詳細は後述の
+「SQL DDL / TypeScript / OpenAPI 生成」を参照）。
 
 ### Python API
 
@@ -415,6 +429,63 @@ SEPARATE`・`COMP-3`/`PACKED-DECIMAL`・`COMP`系バイナリ・`COMP-1`/`COMP-2
 - **レベル 66（RENAMES）**: `values` に渡しても無視されます。同じストレージを指す
   実体フィールド側に値を渡してください。
 
+## SQL DDL / TypeScript / OpenAPI 生成
+
+`--format sql-ddl` / `--format typescript` / `--format openapi`（または `to_sql_ddl()` /
+`to_typescript()` / `to_openapi_schema()`）は、`emit()` が作る JSON メタデータ形状では
+なく、`decode_record()` が実際に返す**デコード後の値の形**を反映したスキーマを生成します。
+この2つが異なるのは REDEFINES の扱いです: `emit()` はエイリアスを `"union"` 配列に
+畳み込みますが、`decode_record()` は base フィールドとすべてのエイリアスを**独立に
+デコードして兄弟キーとして返します**。ツール全体の一貫性のため、これらの生成物も
+REDEFINES を兄弟として扱います。
+
+```python
+from cobol_data_parser import parse, to_sql_ddl, to_typescript, to_openapi_schema
+
+items = parse(cobol_source)
+print(to_sql_ddl(items))          # CREATE TABLE 文（レコードごとに1つ）
+print(to_typescript(items))       # export interface 宣言（レコードごとに1つ）
+print(to_openapi_schema(items))   # {"components": {"schemas": {...}}}
+```
+
+### 型マッピング
+
+| PIC カテゴリ | デコード時のPython型 | SQL型 | TypeScript型 | OpenAPI型 |
+|---|---|---|---|---|
+| STRING/ALPHABETIC/編集型 | `str` | `VARCHAR(n)` | `string` | `string` |
+| NUMERIC/SIGNED_NUMERIC | `int` | `INTEGER`/`BIGINT`/`NUMERIC(n)` | `number` | `integer` |
+| DECIMAL/SIGNED_DECIMAL/PACKED_DECIMAL（V句あり＝小数部あり） | `Decimal` | `NUMERIC(p,s)` | `string`（浮動小数点誤差を避けるため文字列表現） | `string`（同左） |
+| PACKED_DECIMAL（V句なし＝小数部なし） | `int` | `INTEGER`/`BIGINT` | `number` | `integer` |
+| `COMP`/`COMP-4`/`COMP-5`/`BINARY` | `int` | `SMALLINT`/`INTEGER`/`BIGINT`（バイト長で判定） | `number` | `integer` |
+| `COMP-1`/`COMP-2` | `float` | `FLOAT`/`DOUBLE PRECISION` | `number` | `number` |
+
+`PIC 9(5) COMP-3` のように V 句のない PACKED-DECIMAL は `decode_record()` が `int` を
+返す（`Decimal` にはならない）ため、整数として生成されます。
+
+### 構造の扱い
+
+- **グループ項目**（OCCURSなし）: SQL は親からのパスを `_` でフラット化した列名
+  （`CUST-NAME.FIRST-NAME` → `CUST_NAME_FIRST_NAME`）。TypeScript/OpenAPI はネストした
+  オブジェクトとして表現します。
+- **OCCURS**（固定・`DEPENDING ON` 問わず）: SQL は `<テーブル>__<フィールド>` という
+  子テーブルを生成し、`ID`（合成主キー）・`_PARENT_ID`（親テーブルへのFKのプレース
+  ホルダ、実際の制約は未配線）・`_OCCURS_INDEX` 列を付与します。OCCURS の中に
+  さらに OCCURS がネストする場合も、各階層が自分自身の `ID`/`_PARENT_ID` を持つため
+  そのまま連鎖します。TypeScript/OpenAPI はネイティブな配列（`Array<T>` /
+  `{"type":"array","items":{...}}`）として表現し、OpenAPI には `OccursClause` から
+  `minItems`/`maxItems` を付与します。
+- **REDEFINES**: 前述の通り base フィールドとエイリアスは兄弟として出力されます。SQL
+  では同じ物理バイト範囲を指す2つの nullable な列になるため、生成された DDL には
+  その旨のコメントが付きます（どちらが有効かはアプリ側の判別値で判断してください）。
+- **RENAMES（レベル66）**: 単一ターゲットのもの（`THRU` なし）のみ、対象の複製として
+  出力されます（`decode_record()` と同じ）。`THRU` 範囲指定のものは対象外です。
+- **フィールド名**: SQL のテーブル・列名は `-` を `_` に置換した上で大文字化します
+  （有効な SQL 識別子にするため）。TypeScript の `interface` 名・OpenAPI のスキーマ名
+  のみ COBOL 名から PascalCase 化しますが（有効な識別子にするため）、フィールド自体の
+  キーは元の COBOL 名をそのまま使います（TypeScript ではクォート付き文字列キー）—
+  `emit()` の JSON 出力キーと一貫性を保つためです。
+- `FILLER` とレベル88（条件名）は除外されます（`emit()` と同じ）。
+
 ## PROCEDURE DIVISION 解析（`cobol-proc-parser`）
 
 `cobol-proc-parser` は PROCEDURE DIVISION の SECTION・段落を読み取り、`PERFORM` の
@@ -432,11 +503,12 @@ SEPARATE`・`COMP-3`/`PACKED-DECIMAL`・`COMP`系バイナリ・`COMP-1`/`COMP-2
 | `CALL ... USING [BY REFERENCE/CONTENT/VALUE] ...` | 引数の識別子一覧を取得（`BY` 修飾子は読み飛ばし） |
 | `CALL ... RETURNING <id>` | 戻り値の格納先識別子を取得 |
 | `GO TO <para>` | 単一ターゲットのみ対応。`GO TO a b c DEPENDING ON x` の複数ターゲット形式は未対応 |
+| `IF <cond> [ELSE] END-IF` / `EVALUATE ... WHEN [OTHER] ... END-EVALUATE` | 明示的なスコープターミネータ（`END-IF`/`END-EVALUATE`）付きの形式のみ対応。内側の `PERFORM`/`CALL`/`GO TO` に、どの `IF`/`ELSE`/`WHEN` 分岐に属するかを示す `branch_path` を付与（条件式・WHEN値はテキストとしてそのまま記録するだけで、式文法としては解析しません） |
 
-**スコープ外**: `IF`/`EVALUATE` の分岐条件そのものの解析。各段落のテキストを正規表現で
-スキャンしているだけなので、`EVALUATE`/`IF` の内側にある `PERFORM`/`CALL`/`GO TO` は
-引き続き検出されますが、「どの `WHEN`/分岐に属するか」は区別されません（分岐条件付きの
-制御フローグラフは生成しません）。
+**スコープ外**: ピリオド終端の旧来形式（`END-IF`/`END-EVALUATE` を省略する暗黙スコープ）
+は分岐境界として認識されません — 閉じないブロックはそのまま最後まで入れ子として扱われます
+（例外は出さずベストエフォートで処理を続けます）。`WHEN 1 2 3` や `WHEN 1 THRU 5` のような
+複合WHEN値は、個別の値に分解せずテキストのままラベル化されます。
 
 ### CLI
 
@@ -460,14 +532,21 @@ cobol-proc-parser --format spec main.cob
 ### Python API
 
 ```python
-from cobol_data_parser.proc import parse, build_flow_graph, build_call_graph, to_json, to_markdown_spec
+from cobol_data_parser.proc import parse, build_flow_graph, build_flow_graph_detailed, build_call_graph, to_json, to_markdown_spec
 
 proc = parse(cobol_source)          # ProcedureDivision（program_id/sections/paragraphs）
-flow_edges = build_flow_graph(proc)  # [(呼び出し元段落, PERFORM/GO TO先段落), ...]
+flow_edges = build_flow_graph(proc)  # [(呼び出し元段落, PERFORM/GO TO先段落), ...]（分岐情報なし）
+detailed = build_flow_graph_detailed(proc)  # [FlowEdge(source, target, kind, branch_path), ...]
 call_edges = build_call_graph(proc)  # [(program_id, CALL先), ...]  動的CALLは "DYNAMIC:<識別子>"
 json_str = to_json(proc)
 spec_md = to_markdown_spec(proc)     # 段落一覧・制御フロー・外部依存をまとめたMarkdown仕様書
 ```
+
+`PerformStmt`/`CallStmt`/`GoToStmt` はそれぞれ `branch_path: list[BranchCond]` を持ち、
+`IF`/`ELSE`/`EVALUATE`/`WHEN`/`WHEN OTHER` のどの分岐に属するか（外側から順に）を記録します
+（無条件の文は空リスト）。`to_json()`/`to_python()` はこれを `"branch_path"` として出力し
+（無条件の場合はキー自体を省略）、`to_markdown_spec()` は `CASE-ONE [WHEN: WS-CODE = 1]`
+のようにセルへ注記し、`to_dot(graph="flow")` は条件付きエッジに DOT の `label` を付与します。
 
 ### プログラム仕様書生成
 
@@ -485,18 +564,18 @@ pytest
 
 ## FUTURE WORK
 
-- **`EVALUATE`/`IF` の分岐条件付き制御フロー解析** — 現在は段落テキストの正規表現スキャンで
-  `PERFORM`/`CALL`/`GO TO` を検出しているため、`EVALUATE`/`IF` の内側にあるものも拾えますが
-  「どの分岐か」は区別できません。分岐条件付きCFGには実COBOL文法パーサーが必要な、大きめの機能。
+- **暗黙スコープのIF/EVALUATE対応** — 分岐条件付きCFGは `END-IF`/`END-EVALUATE`
+  付きの明示的スコープ形式のみ対応。ピリオド終端の旧来形式は非対応（閉じないブロックとして
+  ベストエフォートで処理されるだけ）。
 - **`PERFORM ... UNTIL` の条件式パース** — 現在はUNTIL句の有無のみ記録し、条件式本体は未解析。
 - **`GO TO a b c DEPENDING ON x`（複数ターゲット）対応** — 現在は単一ターゲットのGO TOのみ対応。
 - **自然文IPO仕様書生成** — `to_markdown_spec()` は構造（段落・制御フロー・CALL依存）の一覧に
   留まる。データ項目の読み書き追跡を伴う自然文の処理概要・IPO文書化は別途大きな機能。
-- **DB スキーマ生成** — `01` レベルレコードから SQL DDL（`CREATE TABLE`）を出力。
-- **TypeScript 型生成** — モダンバックエンドで直接使える `interface` / `type` 宣言を出力。
-- **OpenAPI コンポーネント生成** — REST API ドキュメント向けに `components/schemas` エントリを出力。
 - **フルプログラム入力対応** — COBOL ソースファイル全体から DATA DIVISION を自動的に抽出（FILE SECTION の FD 記述子を含む）。
 - **IBM 16進浮動小数点** — `COMP-1`/`COMP-2` は現在 IEEE754 のみ対応。IBM 独自の16進浮動小数点形式は未対応。
+- **SQL DDL の子テーブルFK配線** — OCCURS由来の子テーブルの `_PARENT_ID` は現状プレース
+  ホルダで、実際の外部キー制約や実行時の値の紐付けは呼び出し側の責務。
+- **INDEX/POINTER の SQL/TS/OpenAPI 対応** — `decode_record()` 同様、現状は非対応。
 
 ## ライセンス
 

@@ -4,13 +4,35 @@ import json
 from pprint import pformat
 
 from .depgraph import build_call_graph
-from .flow import build_flow_graph
-from .models import ProcedureDivision
+from .flow import build_flow_graph, build_flow_graph_detailed
+from .models import BranchCond, ProcedureDivision
 
 _GRAPH_BUILDERS = {"flow": build_flow_graph, "call": build_call_graph}
 
 
+def _branch_path_json(branch_path: list[BranchCond]) -> list[dict]:
+    return [{"kind": b.kind, "text": b.text} for b in branch_path]
+
+
 def _to_dict(proc: ProcedureDivision) -> dict:
+    def _perform(s):
+        node = {"target": s.target, "thru": s.thru, "varying": s.varying, "until": s.until}
+        if s.branch_path:
+            node["branch_path"] = _branch_path_json(s.branch_path)
+        return node
+
+    def _call(c):
+        node = {"target": c.target, "dynamic": c.dynamic, "using": c.using, "returning": c.returning}
+        if c.branch_path:
+            node["branch_path"] = _branch_path_json(c.branch_path)
+        return node
+
+    def _goto(g):
+        node = {"target": g.target}
+        if g.branch_path:
+            node["branch_path"] = _branch_path_json(g.branch_path)
+        return node
+
     return {
         "program_id": proc.program_id,
         "sections": proc.sections,
@@ -18,20 +40,9 @@ def _to_dict(proc: ProcedureDivision) -> dict:
             {
                 "name": p.name,
                 "section": p.section,
-                "performs": [
-                    {"target": s.target, "thru": s.thru, "varying": s.varying, "until": s.until}
-                    for s in p.performs
-                ],
-                "calls": [
-                    {
-                        "target": c.target,
-                        "dynamic": c.dynamic,
-                        "using": c.using,
-                        "returning": c.returning,
-                    }
-                    for c in p.calls
-                ],
-                "go_tos": [{"target": g.target} for g in p.go_tos],
+                "performs": [_perform(s) for s in p.performs],
+                "calls": [_call(c) for c in p.calls],
+                "go_tos": [_goto(g) for g in p.go_tos],
             }
             for p in proc.paragraphs
         ],
@@ -54,10 +65,28 @@ def _edges(proc: ProcedureDivision, graph: str) -> list[tuple[str, str]]:
     return _GRAPH_BUILDERS[graph](proc)
 
 
+def _branch_label(branch_path: list[BranchCond]) -> str | None:
+    if not branch_path:
+        return None
+    return " / ".join(f"{b.kind}: {b.text}" for b in branch_path)
+
+
 def to_dot(proc: ProcedureDivision, graph: str = "flow") -> str:
+    if graph not in _GRAPH_BUILDERS:
+        raise ValueError(f"Unknown graph {graph!r}; expected 'flow' or 'call'")
+
     lines = [f"digraph {graph} {{"]
-    for source, target in _edges(proc, graph):
-        lines.append(f'  "{source}" -> "{target}";')
+    if graph == "flow":
+        for edge in build_flow_graph_detailed(proc):
+            label = _branch_label(edge.branch_path)
+            if label:
+                escaped = label.replace('"', '\\"')
+                lines.append(f'  "{edge.source}" -> "{edge.target}" [label="{escaped}"];')
+            else:
+                lines.append(f'  "{edge.source}" -> "{edge.target}";')
+    else:
+        for source, target in _edges(proc, graph):
+            lines.append(f'  "{source}" -> "{target}";')
     lines.append("}")
     return "\n".join(lines)
 

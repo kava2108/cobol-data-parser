@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cobol-data-parser"
-version = "0.6.0"
+version = "0.7.0"
 description = "Parse COBOL DATA DIVISION (JSON/Markdown/decode) and PROCEDURE DIVISION (control-flow/CALL graphs)"
 readme = "README.md"
 requires-python = ">=3.10"

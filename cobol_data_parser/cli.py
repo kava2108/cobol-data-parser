@@ -7,7 +7,10 @@ import click
 from . import __version__
 from .data.docgen import to_markdown_table
 from .data.emitter import to_json
+from .data.openapi_gen import to_openapi_json
 from .data.parser import parse
+from .data.sql_gen import to_sql_ddl
+from .data.ts_gen import to_typescript
 from .proc.docgen import to_markdown_spec
 from .proc.emitter import to_dot, to_json as to_proc_json, to_python, to_sql
 from .proc.parser import parse as parse_proc
@@ -20,10 +23,15 @@ from .proc.parser import parse as parse_proc
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["json", "markdown"]),
+    type=click.Choice(["json", "markdown", "sql-ddl", "typescript", "openapi"]),
     default="json",
     show_default=True,
-    help="Output format: JSON schema, or a Markdown data-item definition table",
+    help=(
+        "Output format: JSON schema, a Markdown data-item definition table, "
+        "SQL CREATE TABLE DDL, TypeScript interfaces, or an OpenAPI components/schemas "
+        "document — the last three mirror decode_record()'s decoded-value shape, not "
+        "the JSON schema's metadata shape"
+    ),
 )
 @click.option("--indent", type=int, default=2, show_default=True, help="JSON indentation spaces")
 @click.option(
@@ -62,7 +70,16 @@ def main(
                 text = f.read()
 
         items = parse(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
-        result = to_markdown_table(items) if output_format == "markdown" else to_json(items, indent=indent)
+        if output_format == "markdown":
+            result = to_markdown_table(items)
+        elif output_format == "sql-ddl":
+            result = to_sql_ddl(items)
+        elif output_format == "typescript":
+            result = to_typescript(items)
+        elif output_format == "openapi":
+            result = to_openapi_json(items, indent=indent)
+        else:
+            result = to_json(items, indent=indent)
 
         if output:
             with open(output, "w", encoding="utf-8") as f:

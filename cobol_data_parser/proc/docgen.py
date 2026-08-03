@@ -6,15 +6,23 @@ graphs, as a structural spec document.
 
 This is a structural summary, not a natural-language IPO (Input-Process-
 Output) narrative: the parser doesn't track which data items each statement
-reads or writes, and statements inside IF/EVALUATE branches are listed
-without their branch condition (see parser.py's docstring for the full
-scope of what's recognized).
+reads or writes. Statements inside IF/ELSE or EVALUATE/WHEN blocks (using
+explicit END-IF/END-EVALUATE scope terminators) are annotated with their
+branch condition; see parser.py's docstring for the full scope of what's
+recognized.
 """
 from __future__ import annotations
 
 from .depgraph import build_call_graph
 from .flow import build_flow_graph
-from .models import CallStmt, PerformStmt, ProcedureDivision
+from .models import BranchCond, CallStmt, GoToStmt, PerformStmt, ProcedureDivision
+
+
+def _branch_suffix(branch_path: list[BranchCond]) -> str:
+    if not branch_path:
+        return ""
+    label = " / ".join(f"{b.kind}: {b.text}" for b in branch_path)
+    return f" [{label}]"
 
 
 def _perform_cell(stmt: PerformStmt) -> str:
@@ -25,7 +33,7 @@ def _perform_cell(stmt: PerformStmt) -> str:
         parts.append(f"VARYING {stmt.varying}")
     if stmt.until:
         parts.append("UNTIL ...")
-    return " ".join(parts)
+    return " ".join(parts) + _branch_suffix(stmt.branch_path)
 
 
 def _call_cell(stmt: CallStmt) -> str:
@@ -35,7 +43,12 @@ def _call_cell(stmt: CallStmt) -> str:
         extras.append("USING " + ", ".join(stmt.using))
     if stmt.returning:
         extras.append(f"RETURNING {stmt.returning}")
-    return f"{label} — {' / '.join(extras)}" if extras else label
+    cell = f"{label} — {' / '.join(extras)}" if extras else label
+    return cell + _branch_suffix(stmt.branch_path)
+
+
+def _goto_cell(stmt: GoToStmt) -> str:
+    return stmt.target + _branch_suffix(stmt.branch_path)
 
 
 def to_markdown_spec(proc: ProcedureDivision) -> str:
@@ -49,7 +62,7 @@ def to_markdown_spec(proc: ProcedureDivision) -> str:
     for p in proc.paragraphs:
         performs = "<br>".join(_perform_cell(s) for s in p.performs)
         calls = "<br>".join(_call_cell(s) for s in p.calls)
-        gotos = "<br>".join(g.target for g in p.go_tos)
+        gotos = "<br>".join(_goto_cell(g) for g in p.go_tos)
         lines.append(f"| {p.name} | {p.section or ''} | {performs} | {calls} | {gotos} |")
     lines.append("")
 
