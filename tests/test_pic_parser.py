@@ -1,7 +1,7 @@
 import pytest
 
-from cobol_data_parser.models import PicCategory
-from cobol_data_parser.pic_parser import parse_pic
+from cobol_data_parser.data.models import PicCategory
+from cobol_data_parser.data.pic_parser import parse_pic
 
 
 @pytest.mark.parametrize(

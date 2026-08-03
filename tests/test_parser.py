@@ -1,7 +1,7 @@
 import pytest
 
-from cobol_data_parser.models import PicCategory
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.models import PicCategory
+from cobol_data_parser.data.parser import parse
 
 SIMPLE = """
 01 CUSTOMER-REC.

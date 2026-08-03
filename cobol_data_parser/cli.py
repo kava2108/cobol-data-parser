@@ -5,9 +5,11 @@ import sys
 import click
 
 from . import __version__
-from .docgen import to_markdown_table
-from .emitter import to_json
-from .parser import parse
+from .data.docgen import to_markdown_table
+from .data.emitter import to_json
+from .data.parser import parse
+from .proc.emitter import to_dot, to_json as to_proc_json, to_python, to_sql
+from .proc.parser import parse as parse_proc
 
 
 @click.command()
@@ -60,6 +62,75 @@ def main(
 
         items = parse(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
         result = to_markdown_table(items) if output_format == "markdown" else to_json(items, indent=indent)
+
+        if output:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(result)
+                f.write("\n")
+        else:
+            click.echo(result)
+
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+@click.command()
+@click.version_option(__version__, prog_name="cobol-proc-parser")
+@click.argument("input_file", type=click.Path(exists=True, allow_dash=True), default="-")
+@click.option("-o", "--output", type=click.Path(), help="Output file (default: stdout)")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "dot", "sql", "python"]),
+    default="json",
+    show_default=True,
+    help="Output format: JSON schema, Graphviz DOT, SQL INSERT statements, or Python pretty-print",
+)
+@click.option(
+    "--graph",
+    type=click.Choice(["flow", "call"]),
+    default="flow",
+    show_default=True,
+    help="Which graph to emit for --format dot/sql: PERFORM control-flow or CALL dependencies",
+)
+@click.option("--indent", type=int, default=2, show_default=True, help="JSON indentation spaces")
+@click.option(
+    "--fixed/--free",
+    default=None,
+    help="Force fixed-format (cols 1-72) or free-format parsing",
+)
+def proc_main(
+    input_file: str,
+    output: str | None,
+    output_format: str,
+    graph: str,
+    indent: int,
+    fixed: bool | None,
+) -> None:
+    """Analyze COBOL PROCEDURE DIVISION: PERFORM control-flow and CALL dependency graphs.
+
+    Reads COBOL source from INPUT_FILE (or stdin with -) and writes the
+    requested representation to stdout or --output. Only the most common
+    forms of PERFORM, SECTION and CALL statements are recognized.
+    """
+    try:
+        if input_file == "-":
+            text = sys.stdin.read()
+        else:
+            with open(input_file, encoding="utf-8") as f:
+                text = f.read()
+
+        proc = parse_proc(text, fixed_format=fixed)
+
+        if output_format == "json":
+            result = to_proc_json(proc, indent=indent)
+        elif output_format == "dot":
+            result = to_dot(proc, graph=graph)
+        elif output_format == "sql":
+            result = to_sql(proc, graph=graph)
+        else:
+            result = to_python(proc)
 
         if output:
             with open(output, "w", encoding="utf-8") as f:

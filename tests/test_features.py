@@ -5,8 +5,8 @@ import warnings
 
 import pytest
 
-from cobol_data_parser.emitter import emit
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.emitter import emit
+from cobol_data_parser.data.parser import parse
 
 
 # ─── OCCURS DEPENDING ON ─────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ def test_copybook_fields_have_correct_types(tmp_path):
     items = parse(cobol, copybook_dirs=[tmp_path])
     children = items[0].children
 
-    from cobol_data_parser.models import PicCategory
+    from cobol_data_parser.data.models import PicCategory
     assert children[0].name == "STREET"
     assert children[0].pic.category == PicCategory.STRING
     assert children[2].name == "ZIP"

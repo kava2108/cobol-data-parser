@@ -1,12 +1,12 @@
 """cobol-data-parser: Convert COBOL DATA DIVISION to JSON, and decode COBOL records."""
 
-from .codec import decode_record, iter_records
-from .docgen import to_markdown_table
-from .emitter import emit, to_json
-from .models import DataItem, OccursClause, PicCategory, PicClause
-from .parser import parse
+from .data.codec import decode_record, iter_records
+from .data.docgen import to_markdown_table
+from .data.emitter import emit, to_json
+from .data.models import DataItem, OccursClause, PicCategory, PicClause
+from .data.parser import parse
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "parse",
     "emit",

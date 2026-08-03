@@ -1,7 +1,7 @@
 """Tests for AST normalization: byte offset assignment across the tree."""
 from __future__ import annotations
 
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.parser import parse
 
 
 def test_sequential_offsets():

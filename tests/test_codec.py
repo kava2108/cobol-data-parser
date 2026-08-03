@@ -6,8 +6,8 @@ from decimal import Decimal
 
 import pytest
 
-from cobol_data_parser.codec import decode_record, iter_records
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.codec import decode_record, iter_records
+from cobol_data_parser.data.parser import parse
 
 
 def _zoned(digits: str, negative: bool = False) -> bytes:

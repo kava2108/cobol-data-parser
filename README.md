@@ -1,12 +1,18 @@
 # cobol-data-parser
 
-COBOL の DATA DIVISION を解析し、JSON に変換するツール。
+COBOL の DATA DIVISION と PROCEDURE DIVISION を解析するツール群。
 
-COBOL モダナイゼーションの第一歩は、データ構造の把握です。本ツールは DATA DIVISION の
-`01` / `05` / `10` ... レベル階層を読み取り、**PIC/USAGE から物理バイト長を算出し**、
-**各フィールドにバイトオフセットを付与した**上で、スキーマ生成・API 設計・LLM を用いた
-移行ワークフローで活用できる JSON 表現を出力します。さらに、そのオフセット情報を使って
-**実際の EBCDIC/COMP-3/バイナリのレコードをデコード**することもできます。
+COBOL モダナイゼーションの第一歩は、データ構造とロジックの把握です。本パッケージは
+2つのツールで構成されます。
+
+- **`cobol-data-parser`** — DATA DIVISION の `01` / `05` / `10` ... レベル階層を読み取り、
+  **PIC/USAGE から物理バイト長を算出し**、**各フィールドにバイトオフセットを付与した**上で、
+  スキーマ生成・API 設計・LLM を用いた移行ワークフローで活用できる JSON 表現を出力します。
+  さらに、そのオフセット情報を使って**実際の EBCDIC/COMP-3/バイナリのレコードをデコード**
+  することもできます。
+- **`cobol-proc-parser`** — PROCEDURE DIVISION の SECTION・段落構造を読み取り、
+  `PERFORM` による**制御フローグラフ**と `CALL` による**プログラム間依存関係グラフ**を
+  JSON / Graphviz DOT / SQL / Python の各形式で出力します。
 
 ## 使用例
 
@@ -347,6 +353,43 @@ REDEFINES されたフィールドは、JSON スキーマの `"union"` とは異
 ODO より後ろのフィールドも正しくデコードされます。これが型ロワリング／AST 正規化の
 静的レイヤーに対して、コーデック層が実データを使って実現する価値です。
 
+## PROCEDURE DIVISION 解析（`cobol-proc-parser`）
+
+`cobol-proc-parser` は PROCEDURE DIVISION の SECTION・段落を読み取り、`PERFORM` の
+**制御フローグラフ**と `CALL` の**依存関係グラフ**を出力します。対応しているのは
+`PERFORM` / `SECTION` / `CALL` の最も一般的な用法のみです（複雑な `PERFORM ... VARYING`
+の条件式や `CALL` の `USING`/`RETURNING` 引数の詳細解析は対象外）。
+
+### CLI
+
+```bash
+# 制御フロー・依存関係を含むJSON全体を出力
+cobol-proc-parser main.cob
+
+# PERFORM の制御フローグラフを Graphviz DOT で出力
+cobol-proc-parser --format dot --graph flow main.cob | dot -Tpng -o flow.png
+
+# CALL の依存関係グラフを SQL INSERT 文で出力
+cobol-proc-parser --format sql --graph call main.cob
+
+# Python の pprint 形式で出力
+cobol-proc-parser --format python main.cob
+```
+
+### Python API
+
+```python
+from cobol_data_parser.proc import parse, build_flow_graph, build_call_graph, to_json
+
+proc = parse(cobol_source)          # ProcedureDivision（program_id/sections/paragraphs）
+flow_edges = build_flow_graph(proc)  # [(呼び出し元段落, PERFORM先段落), ...]
+call_edges = build_call_graph(proc)  # [(program_id, CALL先), ...]  動的CALLは "DYNAMIC:<識別子>"
+json_str = to_json(proc)
+```
+
+`PERFORM A THRU B` はソース中の物理的な段落の並びに従って、A から B までの間にある
+全段落へのエッジとして展開されます（COBOL の実行意味論どおり）。
+
 ## 開発
 
 ```bash
@@ -356,8 +399,11 @@ pytest
 
 ## FUTURE WORK
 
-- **プログラム仕様書生成** — PROCEDURE DIVISION を解析し、処理概要・IPO・ロジックを
-  文書化する。DATA DIVISION 専用の現パーサーとは別の解析基盤が必要な、大きめの機能。
+- **PROCEDURE DIVISION 解析の拡張** — `cobol-proc-parser` は現在 PERFORM/SECTION/CALL の
+  基本形のみに対応。`PERFORM ... VARYING`/`UNTIL` の条件式、`CALL ... USING`/`RETURNING`
+  引数、`GO TO`、`EVALUATE` の分岐などを取り込んだより精密な制御フロー解析。
+- **プログラム仕様書生成** — 制御フローグラフを土台に、処理概要・IPO・ロジックを
+  自然文で文書化する。
 - **DB スキーマ生成** — `01` レベルレコードから SQL DDL（`CREATE TABLE`）を出力。
 - **TypeScript 型生成** — モダンバックエンドで直接使える `interface` / `type` 宣言を出力。
 - **OpenAPI コンポーネント生成** — REST API ドキュメント向けに `components/schemas` エントリを出力。

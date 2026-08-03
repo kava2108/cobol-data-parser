@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cobol-data-parser"
-version = "0.4.0"
-description = "Parse COBOL DATA DIVISION, convert to JSON/Markdown, and decode real records"
+version = "0.5.0"
+description = "Parse COBOL DATA DIVISION (JSON/Markdown/decode) and PROCEDURE DIVISION (control-flow/CALL graphs)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["cobol", "parser", "modernization", "legacy", "json", "mainframe"]
+keywords = ["cobol", "parser", "modernization", "legacy", "json", "mainframe", "control-flow", "call-graph"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -28,6 +28,7 @@ dev = ["pytest>=7.0"]
 
 [project.scripts]
 cobol-data-parser = "cobol_data_parser.cli:main"
+cobol-proc-parser = "cobol_data_parser.cli:proc_main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

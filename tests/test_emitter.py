@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from cobol_data_parser.emitter import emit, to_json
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.emitter import emit, to_json
+from cobol_data_parser.data.parser import parse
 
 
 def _parse_emit(cobol: str) -> dict:

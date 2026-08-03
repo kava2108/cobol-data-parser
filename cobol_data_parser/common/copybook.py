@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import warnings
 from pathlib import Path
+from typing import Callable
 
 _COPYBOOK_EXTS = (".cpy", ".CPY", ".cob", ".COB", ".CBL", ".cbl")
 
@@ -63,18 +64,22 @@ def _apply_replacing(content: str, replacing_str: str) -> str:
 def expand_copies(
     entries: list[str],
     copybook_dirs: list[Path],
+    splitter: Callable[[list[str]], list[str]],
     fixed_format: bool | None = None,
     _depth: int = 0,
 ) -> list[str]:
     """Replace COPY statement entries with the entries from the referenced copybook.
+
+    `splitter` breaks preprocessed copybook source lines back into entries using
+    the same convention as `entries` (e.g. DATA DIVISION items or PROCEDURE
+    DIVISION statements), so this function stays usable from either division.
 
     Recursively expands nested COPY statements up to depth 10.
     """
     if _depth > 10:
         return entries
 
-    # Import here to avoid circular dependency (copybook ← lexer ← (nothing))
-    from .lexer import preprocess, split_data_items
+    from .lexer import preprocess
 
     result: list[str] = []
     for entry in entries:
@@ -99,8 +104,8 @@ def expand_copies(
         if replacing_str:
             content = _apply_replacing(content, replacing_str)
 
-        copy_entries = split_data_items(preprocess(content, fixed_format))
-        copy_entries = expand_copies(copy_entries, copybook_dirs, fixed_format, _depth + 1)
+        copy_entries = splitter(preprocess(content, fixed_format))
+        copy_entries = expand_copies(copy_entries, copybook_dirs, splitter, fixed_format, _depth + 1)
         result.extend(copy_entries)
 
     return result

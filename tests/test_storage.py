@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from cobol_data_parser.pic_parser import parse_pic
-from cobol_data_parser.storage import compute_byte_length
+from cobol_data_parser.data.pic_parser import parse_pic
+from cobol_data_parser.data.storage import compute_byte_length
 
 
 @pytest.mark.parametrize(

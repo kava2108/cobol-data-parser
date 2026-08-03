@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..common.lexer import preprocess
 from .layout import assign_offsets
-from .lexer import preprocess, split_data_items
+from .lexer import split_data_items
 from .models import DataItem, OccursClause, PicCategory, PicClause
 from .pic_parser import parse_pic
 from .storage import compute_byte_length
@@ -188,9 +189,9 @@ def parse(
     entries = split_data_items(logical)
 
     if copybook_dirs:
-        from .copybook import expand_copies
+        from ..common.copybook import expand_copies
         dirs = [Path(d) for d in copybook_dirs]
-        entries = expand_copies(entries, dirs, fixed_format)
+        entries = expand_copies(entries, dirs, split_data_items, fixed_format)
 
     flat: list[DataItem] = []
     for entry in entries:

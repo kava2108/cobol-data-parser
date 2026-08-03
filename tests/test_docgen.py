@@ -1,8 +1,8 @@
 """Tests for the Markdown data-item definition table generator."""
 from __future__ import annotations
 
-from cobol_data_parser.docgen import to_markdown_table
-from cobol_data_parser.parser import parse
+from cobol_data_parser.data.docgen import to_markdown_table
+from cobol_data_parser.data.parser import parse
 
 
 def _cell(line: str, index: int) -> str:
