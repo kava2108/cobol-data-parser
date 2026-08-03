@@ -114,6 +114,20 @@ def test_filler_and_88_level_are_included():
     assert "ACTIVE" in table
 
 
+def test_renames_shown_in_name_cell():
+    cobol = """
+    01 REC.
+       05 FIELD-A PIC X(5).
+       05 FIELD-B PIC 9(3).
+       66 ALIAS-A RENAMES FIELD-A.
+       66 COMBINED RENAMES FIELD-A THRU FIELD-B.
+    """
+    items = parse(cobol)
+    lines = to_markdown_table(items).splitlines()
+    assert _cell(lines[5], 1) == "ALIAS-A（RENAMES FIELD-A）"
+    assert _cell(lines[6], 1) == "COMBINED（RENAMES FIELD-A THRU FIELD-B）"
+
+
 def test_unknown_offset_is_blank_not_none_string():
     cobol = """
     01 REC.

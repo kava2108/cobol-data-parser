@@ -9,7 +9,7 @@ COBOL モダナイゼーションの第一歩は、データ構造とロジッ�
   **PIC/USAGE から物理バイト長を算出し**、**各フィールドにバイトオフセットを付与した**上で、
   スキーマ生成・API 設計・LLM を用いた移行ワークフローで活用できる JSON 表現を出力します。
   さらに、そのオフセット情報を使って**実際の EBCDIC/COMP-3/バイナリのレコードをデコード**
-  することもできます。
+  し、逆に Python の値からレコードバイト列へ**エンコード**することもできます。
 - **`cobol-proc-parser`** — PROCEDURE DIVISION の SECTION・段落構造を読み取り、
   `PERFORM` による**制御フローグラフ**と `CALL` による**プログラム間依存関係グラフ**を
   JSON / Graphviz DOT / SQL / Python の各形式で出力します。
@@ -88,7 +88,7 @@ cobol-data-parser --format markdown customer.cob
 ### Python API
 
 ```python
-from cobol_data_parser import parse, emit, to_json, to_markdown_table, decode_record, iter_records
+from cobol_data_parser import parse, emit, to_json, to_markdown_table, decode_record, encode_record, iter_records
 
 with open("customer.cob") as f:
     text = f.read()
@@ -136,6 +136,7 @@ PIC と USAGE の組み合わせから、実際の物理ストレージサイズ
 | PIC / USAGE | バイト長 |
 |---|---|
 | DISPLAY（既定） | 桁数と同じ（符号はオーバーパンチのため追加バイトなし） |
+| DISPLAY + `SIGN IS ... SEPARATE` | 桁数 + 1（符号が独立した文字バイトになるため） |
 | `COMP-3` / `PACKED-DECIMAL` | `桁数 // 2 + 1` |
 | `COMP` / `COMP-4` / `COMP-5` / `BINARY` | 桁数に応じて 2 / 4 / 8 バイト（IBM標準の階層） |
 | `COMP-1` / `COMP-2` | 固定 4 / 8 バイト |
@@ -159,7 +160,9 @@ PIC と USAGE の組み合わせから、実際の物理ストレージサイズ
 | `COPY <name>` | `--copybook-dir` 指定時にインライン展開（`REPLACING` 対応） |
 | `FILLER` | 出力から除外 |
 | レベル 88（条件名） | 出力から除外 |
+| レベル 66（`RENAMES`） | エイリアスとして `"renames"` キー付きで出力（後述） |
 | レベル 77（独立項目） | トップレベルのエントリとして出力 |
+| `SIGN IS LEADING/TRAILING [SEPARATE]` | 符号位置・独立バイトの有無を解析し、バイト長・デコードに反映 |
 
 ### フォーマット自動検出
 
@@ -271,6 +274,34 @@ REDEFINES エイリアスは元フィールドの `"union"` 配列に折り畳�
 }
 ```
 
+### レベル 66（RENAMES）
+
+`66 <name> RENAMES <target> [THRU <target2>].` は、既存フィールド（の範囲）を
+別名で参照するエイリアスです。単一ターゲットの場合は対象と同じ `"offset"`/
+`"bytes"`/型を継承し、`THRU` で範囲指定した場合は対象範囲を合算した
+`"bytes"` のみ持ちます（複数の異種フィールドにまたがるため単一の型は
+表現できません）。
+
+```cobol
+05 FIELD-A PIC X(5).
+05 FIELD-B PIC 9(3).
+66 ALIAS-A   RENAMES FIELD-A.
+66 COMBINED  RENAMES FIELD-A THRU FIELD-B.
+```
+
+```json
+{
+  "FIELD-A": { "type": "string", "length": 5, "offset": 0, "bytes": 5 },
+  "FIELD-B": { "type": "numeric", "length": 3, "offset": 5, "bytes": 3 },
+  "ALIAS-A": { "type": "string", "length": 5, "offset": 0, "bytes": 5, "renames": "FIELD-A" },
+  "COMBINED": { "offset": 0, "bytes": 8, "renames": ["FIELD-A", "FIELD-B"] }
+}
+```
+
+デコード（`decode_record()`）は単一ターゲットの RENAMES のみ値を返します
+（`THRU` で範囲指定したものは異種ストレージの合成のため、デコード結果には
+含まれません — レイアウト情報としては引き続き JSON/データ項目定義書に出力されます）。
+
 ### COPYBOOK 展開
 
 ```bash
@@ -332,12 +363,13 @@ list(iter_records(record, file_bytes))               # 固定長ファイル全�
 | 種別 | デコード方法 |
 |---|---|
 | DISPLAY テキスト（`string`/`alphabetic`/編集項目） | 指定エンコーディング（既定 `cp037`）でデコードし、末尾スペースを除去 |
-| DISPLAY 数値（ゾーン10進数） | 下位ニブル = 桁。符号付きは最終バイトのゾーンニブル（`0xC`/`0xF`=正、`0xD`/`0xB`=負）で符号判定 |
+| DISPLAY 数値（ゾーン10進数） | 下位ニブル = 桁。符号付きは符号位置バイト（既定は末尾、`SIGN IS LEADING` で先頭）のゾーンニブル（`0xC`/`0xF`=正、`0xD`/`0xB`=負）で符号判定 |
+| DISPLAY 数値 + `SIGN IS ... SEPARATE` | 符号は独立した `'+'`/`'-'` 文字バイト（先頭/末尾）。残りは通常のゾーン10進数として解釈 |
 | `COMP-3` / `PACKED-DECIMAL`（パック10進数） | BCD ニブル展開。小数点は `Decimal` で正確に配置（浮動小数点誤差なし） |
 | `COMP` / `COMP-4` / `COMP-5` / `BINARY` | 2/4/8 バイトの符号付き・符号なし整数。`byte_order="big"`（既定）/ `"little"` |
+| `COMP-1` / `COMP-2` | IEEE754 単精度（4バイト）/倍精度（8バイト）浮動小数点。`byte_order` 対応 |
 
-`COMP-1` / `COMP-2`（浮動小数点）と `INDEX` / `POINTER` は未対応で、`NotImplementedError`
-を送出します。
+`INDEX` / `POINTER` は未対応で、`NotImplementedError` を送出します。
 
 ### REDEFINES
 
@@ -353,12 +385,58 @@ REDEFINES されたフィールドは、JSON スキーマの `"union"` とは異
 ODO より後ろのフィールドも正しくデコードされます。これが型ロワリング／AST 正規化の
 静的レイヤーに対して、コーデック層が実データを使って実現する価値です。
 
+## エンコード（値 → バイト列）
+
+`encode_record()` は `decode_record()` の逆方向です。`decode_record()` と同じ形の
+`dict` を受け取り、実際のレコードバイト列に書き戻します。
+
+```python
+from decimal import Decimal
+from cobol_data_parser import parse, encode_record, decode_record
+
+items = parse(cobol_source)
+record = items[0]
+
+values = {"CUST-ID": 12345, "CUST-NAME": "ALICE", "BALANCE": Decimal("-123.45")}
+raw = encode_record(record, values)                 # bytes
+decode_record(record, raw) == values                # 対称（round-trip）
+```
+
+対応する型はデコードと同じです（DISPLAY テキスト・ゾーン10進数・`SIGN IS ...
+SEPARATE`・`COMP-3`/`PACKED-DECIMAL`・`COMP`系バイナリ・`COMP-1`/`COMP-2`）。
+`INDEX`/`POINTER` は未対応で `NotImplementedError` を送出します。
+
+- **REDEFINES**: 同じスロットに base フィールドとエイリアスの両方の値を渡すことはできません
+  （物理的に同じバイト列を書くため）。`values` に base フィールド名があればそちらを優先し、
+  なければ見つかったエイリアスの値を書き込みます。
+- **OCCURS DEPENDING ON**: 件数はリストの長さから自動算出せず、`depending_on` が指す
+  フィールド自身の値（`values` に含まれる件数）をそのまま使います。呼び出し側でリストの
+  長さと件数の整合性を保つ必要があります。
+- **レベル 66（RENAMES）**: `values` に渡しても無視されます。同じストレージを指す
+  実体フィールド側に値を渡してください。
+
 ## PROCEDURE DIVISION 解析（`cobol-proc-parser`）
 
 `cobol-proc-parser` は PROCEDURE DIVISION の SECTION・段落を読み取り、`PERFORM` の
-**制御フローグラフ**と `CALL` の**依存関係グラフ**を出力します。対応しているのは
-`PERFORM` / `SECTION` / `CALL` の最も一般的な用法のみです（複雑な `PERFORM ... VARYING`
-の条件式や `CALL` の `USING`/`RETURNING` 引数の詳細解析は対象外）。
+**制御フローグラフ**と `CALL` の**依存関係グラフ**、そして構造的な**プログラム仕様書**を
+出力します。
+
+対応しているのは以下の構文です（COBOL の完全な文法ではなく、実務でよく使われる形に絞っています）:
+
+| 文 | 対応範囲 |
+|---|---|
+| `PERFORM <para>` | 単純な呼び出し |
+| `PERFORM <para> THRU <para2>` | 範囲呼び出し。ソース中の物理的な段落の並びに従って A〜B の全段落へのエッジに展開（COBOL の実行意味論どおり） |
+| `PERFORM <para> VARYING <id> ... UNTIL ...` | `VARYING` の識別子は取得。`UNTIL` はループの有無のみ記録し、条件式そのものは解析しません（COBOL式文法のフルパースはスコープ外） |
+| `CALL '<lit>'` / `CALL <id>` | 静的リテラル呼び出し / 動的呼び出し（`DYNAMIC:<識別子>` として依存関係グラフに表現） |
+| `CALL ... USING [BY REFERENCE/CONTENT/VALUE] ...` | 引数の識別子一覧を取得（`BY` 修飾子は読み飛ばし） |
+| `CALL ... RETURNING <id>` | 戻り値の格納先識別子を取得 |
+| `GO TO <para>` | 単一ターゲットのみ対応。`GO TO a b c DEPENDING ON x` の複数ターゲット形式は未対応 |
+
+**スコープ外**: `IF`/`EVALUATE` の分岐条件そのものの解析。各段落のテキストを正規表現で
+スキャンしているだけなので、`EVALUATE`/`IF` の内側にある `PERFORM`/`CALL`/`GO TO` は
+引き続き検出されますが、「どの `WHEN`/分岐に属するか」は区別されません（分岐条件付きの
+制御フローグラフは生成しません）。
 
 ### CLI
 
@@ -374,21 +452,29 @@ cobol-proc-parser --format sql --graph call main.cob
 
 # Python の pprint 形式で出力
 cobol-proc-parser --format python main.cob
+
+# プログラム仕様書（Markdown）として出力
+cobol-proc-parser --format spec main.cob
 ```
 
 ### Python API
 
 ```python
-from cobol_data_parser.proc import parse, build_flow_graph, build_call_graph, to_json
+from cobol_data_parser.proc import parse, build_flow_graph, build_call_graph, to_json, to_markdown_spec
 
 proc = parse(cobol_source)          # ProcedureDivision（program_id/sections/paragraphs）
-flow_edges = build_flow_graph(proc)  # [(呼び出し元段落, PERFORM先段落), ...]
+flow_edges = build_flow_graph(proc)  # [(呼び出し元段落, PERFORM/GO TO先段落), ...]
 call_edges = build_call_graph(proc)  # [(program_id, CALL先), ...]  動的CALLは "DYNAMIC:<識別子>"
 json_str = to_json(proc)
+spec_md = to_markdown_spec(proc)     # 段落一覧・制御フロー・外部依存をまとめたMarkdown仕様書
 ```
 
-`PERFORM A THRU B` はソース中の物理的な段落の並びに従って、A から B までの間にある
-全段落へのエッジとして展開されます（COBOL の実行意味論どおり）。
+### プログラム仕様書生成
+
+`to_markdown_spec()`（CLI: `--format spec`）は、段落一覧（PERFORM/CALL/GO TO付き）・
+制御フローグラフ・CALL依存関係グラフをまとめた構造的なMarkdown文書を生成します。
+どのデータ項目を読み書きしているかまでは追跡していないため、自然文によるIPO
+（Input-Process-Output）の説明文書ではなく、**構造の一覧**である点に注意してください。
 
 ## 開発
 
@@ -399,19 +485,18 @@ pytest
 
 ## FUTURE WORK
 
-- **PROCEDURE DIVISION 解析の拡張** — `cobol-proc-parser` は現在 PERFORM/SECTION/CALL の
-  基本形のみに対応。`PERFORM ... VARYING`/`UNTIL` の条件式、`CALL ... USING`/`RETURNING`
-  引数、`GO TO`、`EVALUATE` の分岐などを取り込んだより精密な制御フロー解析。
-- **プログラム仕様書生成** — 制御フローグラフを土台に、処理概要・IPO・ロジックを
-  自然文で文書化する。
+- **`EVALUATE`/`IF` の分岐条件付き制御フロー解析** — 現在は段落テキストの正規表現スキャンで
+  `PERFORM`/`CALL`/`GO TO` を検出しているため、`EVALUATE`/`IF` の内側にあるものも拾えますが
+  「どの分岐か」は区別できません。分岐条件付きCFGには実COBOL文法パーサーが必要な、大きめの機能。
+- **`PERFORM ... UNTIL` の条件式パース** — 現在はUNTIL句の有無のみ記録し、条件式本体は未解析。
+- **`GO TO a b c DEPENDING ON x`（複数ターゲット）対応** — 現在は単一ターゲットのGO TOのみ対応。
+- **自然文IPO仕様書生成** — `to_markdown_spec()` は構造（段落・制御フロー・CALL依存）の一覧に
+  留まる。データ項目の読み書き追跡を伴う自然文の処理概要・IPO文書化は別途大きな機能。
 - **DB スキーマ生成** — `01` レベルレコードから SQL DDL（`CREATE TABLE`）を出力。
 - **TypeScript 型生成** — モダンバックエンドで直接使える `interface` / `type` 宣言を出力。
 - **OpenAPI コンポーネント生成** — REST API ドキュメント向けに `components/schemas` エントリを出力。
-- **`COMP-1` / `COMP-2` 浮動小数点デコード** — IEEE754 または IBM 16進浮動小数点でのデコード対応。
-- **`SIGN IS SEPARATE` 句対応** — 符号を別バイトとして持つ DISPLAY 数値のパース・デコード。
-- **レベル 66（`RENAMES`）対応** — RENAMES 句で作成されるフィールドエイリアスのモデル化。
 - **フルプログラム入力対応** — COBOL ソースファイル全体から DATA DIVISION を自動的に抽出（FILE SECTION の FD 記述子を含む）。
-- **エンコード（値 → バイト列）** — 現在はデコード（バイト列 → 値）のみ対応。逆方向の書き出しは未実装。
+- **IBM 16進浮動小数点** — `COMP-1`/`COMP-2` は現在 IEEE754 のみ対応。IBM 独自の16進浮動小数点形式は未対応。
 
 ## ライセンス
 

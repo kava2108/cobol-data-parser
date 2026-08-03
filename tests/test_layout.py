@@ -82,6 +82,34 @@ def test_group_occurs_multiplies_group_span():
     assert after.offset == 60  # 12 * 5
 
 
+def test_renames_single_target_borrows_offset_and_pic():
+    cobol = """
+    01 REC.
+       05 FIELD-A PIC X(5).
+       05 FIELD-B PIC 9(3).
+       66 ALIAS-A RENAMES FIELD-A.
+    """
+    field_a, field_b, alias_a = parse(cobol)[0].children
+    assert alias_a.level == 66
+    assert alias_a.offset == field_a.offset == 0
+    assert alias_a.byte_length == field_a.byte_length == 5
+    assert alias_a.pic.raw == field_a.pic.raw
+
+
+def test_renames_thru_spans_combined_length_with_no_pic():
+    cobol = """
+    01 REC.
+       05 FIELD-A PIC X(5).
+       05 FIELD-B PIC 9(3).
+       05 FIELD-C PIC 9(2).
+       66 COMBINED RENAMES FIELD-A THRU FIELD-C.
+    """
+    field_a, field_b, field_c, combined = parse(cobol)[0].children
+    assert combined.offset == field_a.offset == 0
+    assert combined.byte_length == 10  # 5 + 3 + 2
+    assert combined.pic is None
+
+
 def test_odo_leaves_trailing_offsets_unknown():
     cobol = """
     01 MASTER-REC.

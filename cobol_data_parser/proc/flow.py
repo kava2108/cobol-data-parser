@@ -4,10 +4,14 @@ from .models import ProcedureDivision
 
 
 def build_flow_graph(proc: ProcedureDivision) -> list[tuple[str, str]]:
-    """Build (caller_paragraph, performed_paragraph) edges from PERFORM statements.
+    """Build (caller_paragraph, target_paragraph) control-flow edges from
+    PERFORM and GO TO statements.
 
     PERFORM <a> THRU <b> expands to edges into every paragraph physically
-    between <a> and <b> (inclusive), matching COBOL's THRU semantics.
+    between <a> and <b> (inclusive), matching COBOL's THRU semantics. GO TO
+    edges represent an unconditional transfer rather than a call-and-return,
+    but both are folded into the same edge list since this is a reachability
+    graph, not a call stack model.
     """
     order = [p.name for p in proc.paragraphs]
     index = {name: i for i, name in enumerate(order)}
@@ -23,5 +27,7 @@ def build_flow_graph(proc: ProcedureDivision) -> list[tuple[str, str]]:
                     edges.append((para.name, target))
             else:
                 edges.append((para.name, perform.target))
+        for goto in para.go_tos:
+            edges.append((para.name, goto.target))
 
     return edges

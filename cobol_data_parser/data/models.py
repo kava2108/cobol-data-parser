@@ -57,6 +57,10 @@ class DataItem:
     occurs: Optional[OccursClause] = None
     byte_length: Optional[int] = None
     offset: Optional[int] = None
+    sign_separate: bool = False
+    sign_leading: bool = False
+    renames: Optional[str] = None
+    renames_thru: Optional[str] = None
     children: list[DataItem] = field(default_factory=list)
 
     @property

@@ -97,3 +97,46 @@ def assign_offsets(items: list[DataItem]) -> None:
     """
     for root in items:
         _assign_recursive(root, 0)
+
+
+def _resolve_renames_in_group(children: list[DataItem]) -> None:
+    real_children = [c for c in children if c.level not in (66, 88)]
+    by_name = {c.name: c for c in real_children}
+
+    for child in children:
+        if child.level != 66 or child.renames is None:
+            continue
+        start = by_name.get(child.renames)
+        if start is None:
+            continue
+
+        child.offset = start.offset
+
+        if child.renames_thru is None:
+            child.pic = start.pic
+            child.byte_length = start.byte_length
+            continue
+
+        end = by_name.get(child.renames_thru)
+        if end is None:
+            child.byte_length = start.byte_length
+            continue
+
+        i0, i1 = real_children.index(start), real_children.index(end)
+        if i0 > i1:
+            i0, i1 = i1, i0
+        spans = [c.byte_length for c in real_children[i0 : i1 + 1]]
+        child.byte_length = None if any(s is None for s in spans) else sum(spans)
+
+
+def resolve_renames(items: list[DataItem]) -> None:
+    """Resolve level-66 RENAMES items against their target sibling(s).
+
+    Must run after assign_offsets(), since a RENAMES item borrows the offset
+    (and, for a single target, the PIC) of the field(s) it renames. RENAMES
+    THRU spans get a combined byte_length but no PIC — the range covers
+    heterogeneous storage with no single elementary type.
+    """
+    for item in items:
+        _resolve_renames_in_group(item.children)
+        resolve_renames(item.children)

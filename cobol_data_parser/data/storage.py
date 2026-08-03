@@ -45,11 +45,17 @@ def _binary_length(digits: int) -> int:
     return 8
 
 
-def compute_byte_length(pic: Optional[PicClause], usage: Optional[str]) -> Optional[int]:
+def compute_byte_length(
+    pic: Optional[PicClause], usage: Optional[str], sign_separate: bool = False
+) -> Optional[int]:
     """Resolve the physical storage length, in bytes, for a PIC/USAGE pair.
 
     Usages without a PIC clause (COMP-1, COMP-2, INDEX, POINTER) get a fixed
     length. Everything else needs a PIC clause to know its size.
+
+    `sign_separate` (SIGN IS ... SEPARATE) adds one extra byte to a DISPLAY
+    numeric field, since its sign then occupies its own character position
+    instead of being over-punched into a digit byte.
     """
     if usage in _FIXED_BYTE_LENGTH:
         return _FIXED_BYTE_LENGTH[usage]
@@ -68,5 +74,5 @@ def compute_byte_length(pic: Optional[PicClause], usage: Optional[str]) -> Optio
     if usage in _BINARY_USAGES or pic.category == PicCategory.BINARY:
         return _binary_length(digits)
 
-    # DISPLAY (default): one byte per digit; sign is over-punched, no extra byte.
-    return digits
+    # DISPLAY (default): one byte per digit; sign is over-punched unless SEPARATE.
+    return digits + 1 if sign_separate else digits

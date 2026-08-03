@@ -8,6 +8,7 @@ from . import __version__
 from .data.docgen import to_markdown_table
 from .data.emitter import to_json
 from .data.parser import parse
+from .proc.docgen import to_markdown_spec
 from .proc.emitter import to_dot, to_json as to_proc_json, to_python, to_sql
 from .proc.parser import parse as parse_proc
 
@@ -82,10 +83,13 @@ def main(
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["json", "dot", "sql", "python"]),
+    type=click.Choice(["json", "dot", "sql", "python", "spec"]),
     default="json",
     show_default=True,
-    help="Output format: JSON schema, Graphviz DOT, SQL INSERT statements, or Python pretty-print",
+    help=(
+        "Output format: JSON schema, Graphviz DOT, SQL INSERT statements, "
+        "Python pretty-print, or a Markdown program specification document"
+    ),
 )
 @click.option(
     "--graph",
@@ -129,6 +133,8 @@ def proc_main(
             result = to_dot(proc, graph=graph)
         elif output_format == "sql":
             result = to_sql(proc, graph=graph)
+        elif output_format == "spec":
+            result = to_markdown_spec(proc)
         else:
             result = to_python(proc)
 

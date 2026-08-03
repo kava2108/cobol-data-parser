@@ -118,6 +118,21 @@ def test_group_occurs_uses_fields_envelope():
     assert "LINE-AMT" in lines["fields"]
 
 
+def test_renames_included_with_renames_key():
+    cobol = """
+    01 WORK.
+       05 FIELD-A PIC X(5).
+       05 FIELD-B PIC 9(3).
+       66 ALIAS-A RENAMES FIELD-A.
+       66 COMBINED RENAMES FIELD-A THRU FIELD-B.
+    """
+    work = _parse_emit(cobol)["WORK"]
+    assert work["ALIAS-A"]["renames"] == "FIELD-A"
+    assert work["ALIAS-A"]["type"] == "string"
+    assert work["COMBINED"]["renames"] == ["FIELD-A", "FIELD-B"]
+    assert "type" not in work["COMBINED"]  # spans heterogeneous storage
+
+
 def test_to_json_is_valid():
     cobol = """
     01 SIMPLE-REC.

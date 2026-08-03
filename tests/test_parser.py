@@ -177,3 +177,26 @@ def test_group_occurs():
     assert order_lines.occurs.max_occurs == 5
     assert order_lines.is_group is True
     assert len(order_lines.children) == 2
+
+
+def test_sign_clause_defaults_to_trailing_overpunch():
+    cobol = "01 REC.\n   05 AMT PIC S9(5).\n"
+    item = parse(cobol)[0].children[0]
+    assert item.sign_separate is False
+    assert item.sign_leading is False
+
+
+def test_sign_is_leading_separate():
+    cobol = "01 REC.\n   05 AMT PIC S9(5) SIGN IS LEADING SEPARATE CHARACTER.\n"
+    item = parse(cobol)[0].children[0]
+    assert item.sign_leading is True
+    assert item.sign_separate is True
+    assert item.byte_length == 6
+
+
+def test_sign_is_trailing_without_separate():
+    cobol = "01 REC.\n   05 AMT PIC S9(5) SIGN IS TRAILING.\n"
+    item = parse(cobol)[0].children[0]
+    assert item.sign_leading is False
+    assert item.sign_separate is False
+    assert item.byte_length == 5

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..common.lexer import preprocess
-from .layout import assign_offsets
+from .layout import assign_offsets, resolve_renames
 from .lexer import split_data_items
 from .models import DataItem, OccursClause, PicCategory, PicClause
 from .pic_parser import parse_pic
@@ -81,6 +81,17 @@ def _parse_occurs(tokens: list[str], start: int) -> tuple[OccursClause | None, i
     return oc, i
 
 
+def _parse_renames_entry(name: str, tokens: list[str]) -> DataItem:
+    """66 <name> RENAMES <target> [THRU|THROUGH <target2>]."""
+    renames: str | None = None
+    renames_thru: str | None = None
+    if len(tokens) >= 4 and tokens[2].upper() == "RENAMES":
+        renames = tokens[3].upper()
+        if len(tokens) >= 6 and tokens[4].upper() in ("THRU", "THROUGH"):
+            renames_thru = tokens[5].upper()
+    return DataItem(level=66, name=name, renames=renames, renames_thru=renames_thru)
+
+
 def _parse_entry(entry: str) -> DataItem | None:
     tokens = entry.split()
     if len(tokens) < 2:
@@ -91,10 +102,15 @@ def _parse_entry(entry: str) -> DataItem | None:
         return None
 
     name = tokens[1].upper()
+
+    if level == 66:
+        return _parse_renames_entry(name, tokens)
     pic: PicClause | None = None
     usage: str | None = None
     redefines: str | None = None
     occurs: OccursClause | None = None
+    sign_separate = False
+    sign_leading = False
 
     i = 2
     while i < len(tokens):
@@ -125,6 +141,22 @@ def _parse_entry(entry: str) -> DataItem | None:
         elif t in _USAGE_MAP:
             usage = _USAGE_MAP[t]
 
+        elif t == "SIGN":
+            # SIGN IS [LEADING|TRAILING] [SEPARATE [CHARACTER]]
+            j = i + 1
+            if j < len(tokens) and tokens[j].upper() == "IS":
+                j += 1
+            if j < len(tokens) and tokens[j].upper() in ("LEADING", "TRAILING"):
+                sign_leading = tokens[j].upper() == "LEADING"
+                i = j
+                j += 1
+            if j < len(tokens) and tokens[j].upper() == "SEPARATE":
+                sign_separate = True
+                i = j
+                j += 1
+                if j < len(tokens) and tokens[j].upper() == "CHARACTER":
+                    i = j
+
         elif t == "VALUE":
             break  # VALUE clause can be complex; skip the rest
 
@@ -146,21 +178,32 @@ def _parse_entry(entry: str) -> DataItem | None:
         usage=usage,
         redefines=redefines,
         occurs=occurs,
-        byte_length=compute_byte_length(pic, usage),
+        byte_length=compute_byte_length(pic, usage, sign_separate=sign_separate),
+        sign_separate=sign_separate,
+        sign_leading=sign_leading,
     )
 
 
 def _build_tree(flat: list[DataItem]) -> list[DataItem]:
     roots: list[DataItem] = []
     stack: list[tuple[int, DataItem]] = []
+    last_real_level = 0
 
     for item in flat:
         if item.level in (1, 77):
             roots.append(item)
             stack = [(item.level, item)]
+            last_real_level = item.level
             continue
 
-        while stack and stack[-1][0] >= item.level:
+        # Level 66 (RENAMES) is a sibling of the fields it renames, not a
+        # child of whichever elementary item happens to precede it — unlike
+        # level 88 (condition names), whose large level number conveniently
+        # keeps it attached to the immediately preceding item via the normal
+        # pop rule below. Pop as if it shared its last real sibling's level.
+        pop_level = last_real_level if item.level == 66 else item.level
+
+        while stack and stack[-1][0] >= pop_level:
             stack.pop()
 
         if stack:
@@ -168,7 +211,10 @@ def _build_tree(flat: list[DataItem]) -> list[DataItem]:
         else:
             roots.append(item)
 
-        stack.append((item.level, item))
+        if item.level != 66:
+            stack.append((item.level, item))
+        if item.level not in (66, 88):
+            last_real_level = item.level
 
     return roots
 
@@ -201,4 +247,5 @@ def parse(
 
     roots = _build_tree(flat)
     assign_offsets(roots)
+    resolve_renames(roots)
     return roots

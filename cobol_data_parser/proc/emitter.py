@@ -18,8 +18,20 @@ def _to_dict(proc: ProcedureDivision) -> dict:
             {
                 "name": p.name,
                 "section": p.section,
-                "performs": [{"target": s.target, "thru": s.thru} for s in p.performs],
-                "calls": [{"target": c.target, "dynamic": c.dynamic} for c in p.calls],
+                "performs": [
+                    {"target": s.target, "thru": s.thru, "varying": s.varying, "until": s.until}
+                    for s in p.performs
+                ],
+                "calls": [
+                    {
+                        "target": c.target,
+                        "dynamic": c.dynamic,
+                        "using": c.using,
+                        "returning": c.returning,
+                    }
+                    for c in p.calls
+                ],
+                "go_tos": [{"target": g.target} for g in p.go_tos],
             }
             for p in proc.paragraphs
         ],

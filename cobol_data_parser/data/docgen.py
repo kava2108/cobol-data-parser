@@ -39,11 +39,18 @@ def _occurs_cell(oc: OccursClause | None) -> str:
     return str(oc.max_occurs)
 
 
+def _name_cell(item: DataItem) -> str:
+    if not item.renames:
+        return item.name
+    target = f"{item.renames} THRU {item.renames_thru}" if item.renames_thru else item.renames
+    return f"{item.name}（RENAMES {target}）"
+
+
 def _row(item: DataItem, depth: int) -> list[str]:
     indent = "　　" * depth
     return [
         f"{indent}{item.level:02d}",
-        item.name,
+        _name_cell(item),
         item.pic.raw if item.pic else "",
         item.usage if (item.usage and item.usage != "DISPLAY") else "",
         _digits_cell(item),

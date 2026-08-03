@@ -31,6 +31,10 @@ def _emit_elementary(item: DataItem) -> dict:
         node["bytes"] = item.byte_length
     if item.usage and item.usage != "DISPLAY":
         node["usage"] = item.usage
+    if item.sign_separate:
+        node["sign"] = "leading-separate" if item.sign_leading else "trailing-separate"
+    if item.renames:
+        node["renames"] = [item.renames, item.renames_thru] if item.renames_thru else item.renames
     return node
 
 
@@ -40,7 +44,7 @@ def _emit_group_children(children: list[DataItem]) -> dict:
     aliases_by_target: dict[str, list[DataItem]] = {}
 
     for child in children:
-        if child.is_filler or child.level in (66, 88):
+        if child.is_filler or child.level == 88:
             continue
         if child.redefines:
             aliases_by_target.setdefault(child.redefines, []).append(child)
