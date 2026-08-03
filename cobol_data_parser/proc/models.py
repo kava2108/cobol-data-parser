@@ -68,12 +68,58 @@ class GoToStmt:
 
 
 @dataclass
+class IoStmt:
+    """A READ/WRITE/REWRITE/DELETE/START statement against a file.
+
+    `operation` is one of "READ", "WRITE", "REWRITE", "DELETE", "START".
+    `target` is the raw identifier as written: for READ/DELETE/START this is
+    a *file-name* (COBOL: `READ <file-name>`), but for WRITE/REWRITE it's a
+    *record-name* (COBOL: `WRITE <record-name>`) — the file is only implied,
+    via whichever FD owns that record. Resolving a record-name back to its
+    file-name is deliberately not done here; see fileaccess.py's
+    build_file_access_graph(), which is the only place that needs it.
+
+    `branch_path` — see PerformStmt. Note that AT END/NOT AT END (on READ)
+    and INVALID KEY/NOT INVALID KEY (on WRITE/REWRITE/DELETE/START) are
+    *not* modeled as branches — _split_branches() only recognizes IF/
+    EVALUATE, so an imperative statement inside one of those clauses simply
+    inherits whatever IF/EVALUATE branch_path is already active.
+    """
+
+    operation: str
+    target: str
+    branch_path: list[BranchCond] = field(default_factory=list)
+
+
+@dataclass
+class FileDescriptor:
+    """A file declared via ENVIRONMENT DIVISION's FILE-CONTROL SELECT clause,
+    merged with its DATA DIVISION FILE SECTION FD entry (matched by file-
+    name). `organization`/`access_mode` are raw words from ORGANIZATION IS/
+    ACCESS MODE IS (e.g. "INDEXED", "SEQUENTIAL", "DYNAMIC") — VSAM files are
+    "INDEXED" (KSDS) or "RELATIVE" (RRDS); plain QSAM files are typically
+    "SEQUENTIAL" or unspecified. `record_names` lists the 01/77-level record
+    names declared under this file's FD (a file can have more than one, for
+    redefinition purposes).
+    """
+
+    name: str
+    organization: str | None = None
+    access_mode: str | None = None
+    record_key: str | None = None
+    alternate_record_keys: list[str] = field(default_factory=list)
+    file_status: str | None = None
+    record_names: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Paragraph:
     name: str
     section: str | None = None
     performs: list[PerformStmt] = field(default_factory=list)
     calls: list[CallStmt] = field(default_factory=list)
     go_tos: list[GoToStmt] = field(default_factory=list)
+    io_statements: list[IoStmt] = field(default_factory=list)
 
 
 @dataclass
@@ -81,3 +127,4 @@ class ProcedureDivision:
     program_id: str | None
     sections: list[str]
     paragraphs: list[Paragraph]
+    files: list[FileDescriptor] = field(default_factory=list)

@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 
 from ..common.lexer import preprocess
-from .models import BranchCond, CallStmt, GoToStmt, Paragraph, PerformStmt, ProcedureDivision
+from .environment import parse_file_descriptors
+from .models import BranchCond, CallStmt, GoToStmt, IoStmt, Paragraph, PerformStmt, ProcedureDivision
 
 _PROGRAM_ID_RE = re.compile(r"^PROGRAM-ID\.\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 _PROCEDURE_DIVISION_RE = re.compile(r"^PROCEDURE\s+DIVISION\b.*\.$", re.IGNORECASE)
@@ -57,6 +58,30 @@ _CALL_RE = re.compile(
 )
 _GOTO_RE = re.compile(r"\bGO\s+TO\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 
+# I/O statements: READ/DELETE/START take a file-name; WRITE/REWRITE take a
+# record-name (the file is only implied, via whichever FD owns that record —
+# see IoStmt's docstring in models.py). 'READ NEXT RECORD' etc. optional
+# keywords between the file-name and the rest of the statement don't affect
+# the target capture, since only the first identifier after the keyword is
+# taken.
+#
+# Lookaround-bounded, not \b: their own scope terminators (END-READ,
+# END-WRITE, END-REWRITE, END-DELETE, END-START) end with the same word, and
+# \b treats '-' as a non-word character — \bREAD\s+(...) would match the
+# 'READ' inside 'END-READ WRITE ...' and capture 'WRITE' as a bogus target.
+_READ_RE = re.compile(r"(?<![A-Z0-9-])READ\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_WRITE_RE = re.compile(r"(?<![A-Z0-9-])WRITE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_REWRITE_RE = re.compile(r"(?<![A-Z0-9-])REWRITE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_DELETE_RE = re.compile(r"(?<![A-Z0-9-])DELETE\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_START_RE = re.compile(r"(?<![A-Z0-9-])START\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_IO_PATTERNS = (
+    ("READ", _READ_RE),
+    ("WRITE", _WRITE_RE),
+    ("REWRITE", _REWRITE_RE),
+    ("DELETE", _DELETE_RE),
+    ("START", _START_RE),
+)
+
 # Heuristic statement boundary: where to stop looking for a CALL's USING/
 # RETURNING clause (and, for IF/WHEN, where a condition/value ends and the
 # statement body begins), since statements aren't otherwise delimited once
@@ -70,7 +95,7 @@ _GOTO_RE = re.compile(r"\bGO\s+TO\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 # _split_branches below.
 _STATEMENT_BOUNDARY_RE = re.compile(
     r"(?<![A-Z0-9-])(?:PERFORM|CALL|DISPLAY|MOVE|IF|END-CALL|GO\s+TO|COMPUTE|ADD|SUBTRACT|"
-    r"EVALUATE|STOP\s+RUN)(?![A-Z0-9-])",
+    r"EVALUATE|STOP\s+RUN|READ|WRITE|REWRITE|DELETE|START)(?![A-Z0-9-])",
     re.IGNORECASE,
 )
 _USING_RE = re.compile(r"\bUSING\s+(.+?)(?=\bRETURNING\b|$)", re.IGNORECASE | re.DOTALL)
@@ -267,6 +292,12 @@ def _scan_segment(para: Paragraph, text: str, branch_path: list[BranchCond]) -> 
     for m in _GOTO_RE.finditer(text):
         para.go_tos.append(GoToStmt(target=m.group(1).upper(), branch_path=branch_path))
 
+    for operation, pattern in _IO_PATTERNS:
+        for m in pattern.finditer(text):
+            para.io_statements.append(
+                IoStmt(operation=operation, target=m.group(1).upper(), branch_path=branch_path)
+            )
+
 
 def _scan_statements(name: str, section: str | None, text: str) -> Paragraph:
     para = Paragraph(name=name, section=section)
@@ -275,15 +306,23 @@ def _scan_statements(name: str, section: str | None, text: str) -> Paragraph:
     return para
 
 
-def parse(text: str, fixed_format: bool | None = None) -> ProcedureDivision:
-    """Parse the PROCEDURE DIVISION of a COBOL source: SECTIONs, paragraphs,
-    and their PERFORM/CALL/GO TO statements.
+def parse(
+    text: str,
+    fixed_format: bool | None = None,
+    copybook_dirs: list[str] | None = None,
+) -> ProcedureDivision:
+    """Parse a COBOL source's ENVIRONMENT DIVISION/DATA DIVISION file
+    declarations and PROCEDURE DIVISION SECTIONs, paragraphs, and their
+    PERFORM/CALL/GO TO/READ/WRITE/REWRITE/DELETE/START statements.
 
     Only the most common forms are recognized: PERFORM with an optional THRU
     range and VARYING identifier (the UNTIL condition's presence is noted,
     not its expression text), literal or identifier CALL targets with USING/
-    RETURNING, and single-target GO TO. Statements are found by scanning each
-    paragraph's text with regexes rather than a real COBOL statement grammar.
+    RETURNING, single-target GO TO, and READ/WRITE/REWRITE/DELETE/START each
+    with their file- or record-name target (see IoStmt in models.py — AT
+    END/INVALID KEY clauses aren't modeled as branches). Statements are
+    found by scanning each paragraph's text with regexes rather than a real
+    COBOL statement grammar.
 
     Statements nested inside IF/ELSE or EVALUATE/WHEN blocks carry a
     `branch_path` (see BranchCond in models.py) recording which branch(es)
@@ -291,9 +330,13 @@ def parse(text: str, fixed_format: bool | None = None) -> ProcedureDivision:
     (END-IF/END-EVALUATE); the older implicit-scope style (terminated by the
     next period) isn't recognized as a block boundary. Condition/WHEN-value
     text is captured verbatim as a label, not parsed as a COBOL expression.
+
+    `copybook_dirs`, if given, expands COPY statements found while scanning
+    FILE SECTION FD entries (see environment.py's parse_file_descriptors()).
     """
     logical = preprocess(text, fixed_format=fixed_format)
     program_id = _find_program_id(logical)
+    files = parse_file_descriptors(text, fixed_format=fixed_format, copybook_dirs=copybook_dirs)
     proc_lines = _procedure_division_lines(logical)
 
     sections: list[str] = []
@@ -334,4 +377,4 @@ def parse(text: str, fixed_format: bool | None = None) -> ProcedureDivision:
 
     flush()
 
-    return ProcedureDivision(program_id=program_id, sections=sections, paragraphs=paragraphs)
+    return ProcedureDivision(program_id=program_id, sections=sections, paragraphs=paragraphs, files=files)

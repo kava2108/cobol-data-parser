@@ -13,7 +13,11 @@ COBOL モダナイゼーションの第一歩は、データ構造とロジッ�
   値の形をそのまま **SQL DDL / TypeScript / OpenAPI スキーマ**としても出力できます。
 - **`cobol-proc-parser`** — PROCEDURE DIVISION の SECTION・段落構造を読み取り、
   `PERFORM` による**制御フローグラフ**（`IF`/`EVALUATE` の分岐条件付き）と `CALL` による
-  **プログラム間依存関係グラフ**を JSON / Graphviz DOT / SQL / Python の各形式で出力します。
+  **プログラム間依存関係グラフ**、さらに ENVIRONMENT DIVISION の `SELECT` 句と
+  DATA DIVISION の FILE SECTION（`FD`）を読み取って**ファイルアクセス解析**（VSAM の
+  `ORGANIZATION IS INDEXED` を含む）を行い、「どの段落が・どの条件分岐で・どのファイルに
+  READ/WRITE/REWRITE/DELETE/STARTを行うか」を JSON / Graphviz DOT / SQL / Python の
+  各形式で出力します。
 
 ## 使用例
 
@@ -489,8 +493,8 @@ print(to_openapi_schema(items))   # {"components": {"schemas": {...}}}
 ## PROCEDURE DIVISION 解析（`cobol-proc-parser`）
 
 `cobol-proc-parser` は PROCEDURE DIVISION の SECTION・段落を読み取り、`PERFORM` の
-**制御フローグラフ**と `CALL` の**依存関係グラフ**、そして構造的な**プログラム仕様書**を
-出力します。
+**制御フローグラフ**と `CALL` の**依存関係グラフ**、ENVIRONMENT DIVISION/FILE SECTION
+から読み取った**ファイルアクセスグラフ**、そして構造的な**プログラム仕様書**を出力します。
 
 対応しているのは以下の構文です（COBOL の完全な文法ではなく、実務でよく使われる形に絞っています）:
 
@@ -503,12 +507,18 @@ print(to_openapi_schema(items))   # {"components": {"schemas": {...}}}
 | `CALL ... USING [BY REFERENCE/CONTENT/VALUE] ...` | 引数の識別子一覧を取得（`BY` 修飾子は読み飛ばし） |
 | `CALL ... RETURNING <id>` | 戻り値の格納先識別子を取得 |
 | `GO TO <para>` | 単一ターゲットのみ対応。`GO TO a b c DEPENDING ON x` の複数ターゲット形式は未対応 |
-| `IF <cond> [ELSE] END-IF` / `EVALUATE ... WHEN [OTHER] ... END-EVALUATE` | 明示的なスコープターミネータ（`END-IF`/`END-EVALUATE`）付きの形式のみ対応。内側の `PERFORM`/`CALL`/`GO TO` に、どの `IF`/`ELSE`/`WHEN` 分岐に属するかを示す `branch_path` を付与（条件式・WHEN値はテキストとしてそのまま記録するだけで、式文法としては解析しません） |
+| `IF <cond> [ELSE] END-IF` / `EVALUATE ... WHEN [OTHER] ... END-EVALUATE` | 明示的なスコープターミネータ（`END-IF`/`END-EVALUATE`）付きの形式のみ対応。内側の `PERFORM`/`CALL`/`GO TO`/`READ`/`WRITE`/`REWRITE`/`DELETE`/`START` に、どの `IF`/`ELSE`/`WHEN` 分岐に属するかを示す `branch_path` を付与（条件式・WHEN値はテキストとしてそのまま記録するだけで、式文法としては解析しません） |
+| `READ <file>` | ファイル名を取得。`AT END`/`NOT AT END` 句そのものは分岐として扱いません（後述） |
+| `WRITE <record>` / `REWRITE <record>` | COBOL構文上、対象は**レコード名**（ファイル名の暗黙参照）。ファイルアクセスグラフ生成時に、そのレコードを持つ`FD`からファイル名へ解決します |
+| `DELETE <file>` / `START <file>` | ファイル名を取得 |
 
 **スコープ外**: ピリオド終端の旧来形式（`END-IF`/`END-EVALUATE` を省略する暗黙スコープ）
 は分岐境界として認識されません — 閉じないブロックはそのまま最後まで入れ子として扱われます
 （例外は出さずベストエフォートで処理を続けます）。`WHEN 1 2 3` や `WHEN 1 THRU 5` のような
-複合WHEN値は、個別の値に分解せずテキストのままラベル化されます。
+複合WHEN値は、個別の値に分解せずテキストのままラベル化されます。`READ ... AT END ...
+NOT AT END ... END-READ` や `WRITE ... INVALID KEY ... END-WRITE` の分岐（AT END/
+INVALID KEYの条件分岐）も `branch_path` としてはモデル化されません（`IF`/`EVALUATE`の
+みが分岐として認識されます）。
 
 ### CLI
 
@@ -522,11 +532,17 @@ cobol-proc-parser --format dot --graph flow main.cob | dot -Tpng -o flow.png
 # CALL の依存関係グラフを SQL INSERT 文で出力
 cobol-proc-parser --format sql --graph call main.cob
 
+# ファイルアクセスグラフを Graphviz DOT で出力
+cobol-proc-parser --format dot --graph file main.cob | dot -Tpng -o file_access.png
+
 # Python の pprint 形式で出力
 cobol-proc-parser --format python main.cob
 
 # プログラム仕様書（Markdown）として出力
 cobol-proc-parser --format spec main.cob
+
+# FILE SECTION 内の COPY を展開する場合
+cobol-proc-parser --copybook-dir ./copybooks main.cob
 ```
 
 ### Python API
@@ -555,6 +571,42 @@ spec_md = to_markdown_spec(proc)     # 段落一覧・制御フロー・外部�
 どのデータ項目を読み書きしているかまでは追跡していないため、自然文によるIPO
 （Input-Process-Output）の説明文書ではなく、**構造の一覧**である点に注意してください。
 
+### ファイルアクセス解析（VSAM/順編成ファイル）
+
+ENVIRONMENT DIVISION の `FILE-CONTROL` にある `SELECT` 句（`ORGANIZATION`/`ACCESS
+MODE`/`RECORD KEY`/`ALTERNATE RECORD KEY`/`FILE STATUS`）と、DATA DIVISION の
+FILE SECTION にある `FD` とその配下の `01`/`77` レコードを読み取り、`FileDescriptor`
+としてファイル名で突き合わせます。VSAM（`ORGANIZATION IS INDEXED` = KSDS、
+`RELATIVE` = RRDS）を主眼としていますが、`SEQUENTIAL`（QSAM/順編成ファイル）にも
+同じ仕組みがそのまま使えます。
+
+```python
+from cobol_data_parser.proc import parse, build_file_access_graph
+
+proc = parse(cobol_source)   # proc.files: list[FileDescriptor]
+edges = build_file_access_graph(proc)
+# [FileAccessEdge(paragraph, file_name, operation, branch_path), ...]
+```
+
+`READ`/`DELETE`/`START` はCOBOL構文上ファイル名を直接取りますが、`WRITE`/`REWRITE`は
+**レコード名**を取ります（ファイルはそのレコードを持つ`FD`経由の暗黙参照）。
+`build_file_access_graph()` はこのレコード名をファイル名へ解決します。解決できない
+場合（そのレコード名を持つ`FD`が見つからない、または複数の`FD`が同じレコード名を
+持っていて一意に決まらない場合）は、`build_call_graph()`の動的CALLが
+`"DYNAMIC:<識別子>"`とするのと同じ流儀で`"UNRESOLVED:<レコード名>"`にフォールバック
+します。
+
+`to_json()`/`to_python()`は`"files"`（FileDescriptor一覧）と各段落の
+`"io_statements"`（branch_path付き）、および`"file_access_edges"`を出力します。
+`to_markdown_spec()`は「## ファイルアクセス」セクションでファイル定義一覧と
+段落×操作×ファイル×分岐の表を出力し、`to_dot(graph="file")`/`to_sql(graph="file")`
+はそれぞれGraphviz DOT（操作と分岐をエッジラベルに）/ `file_access_edges`テーブル
+へのSQL INSERT文として出力します。
+
+**スコープ外**: `READ ... AT END ...`/`WRITE ... INVALID KEY ...`などの条件分岐
+そのもののモデル化（前述）。`ASSIGN TO`で指定される物理データセット名とJCLの
+DD文との対応付け（JCL解析は本ツールのスコープ外）。
+
 ## 開発
 
 ```bash
@@ -576,6 +628,12 @@ pytest
 - **SQL DDL の子テーブルFK配線** — OCCURS由来の子テーブルの `_PARENT_ID` は現状プレース
   ホルダで、実際の外部キー制約や実行時の値の紐付けは呼び出し側の責務。
 - **INDEX/POINTER の SQL/TS/OpenAPI 対応** — `decode_record()` 同様、現状は非対応。
+- **AT END/INVALID KEY の条件分岐モデル化** — ファイルアクセス解析の`branch_path`は
+  `IF`/`EVALUATE`のみ対応。`READ ... AT END ... NOT AT END ...`や`WRITE ... INVALID
+  KEY ...`自体の分岐は未対応（該当ブロック内の文には、その外側にあるIF/EVALUATEの
+  branch_pathがそのまま付与されるのみ）。
+- **JCL/DDによる物理データセット名解決** — `SELECT ... ASSIGN TO`の値とJCLのDD文の
+  対応付けは対象外。JCL解析自体が本ツールのスコープに含まれていない。
 
 ## ライセンス
 

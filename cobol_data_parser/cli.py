@@ -110,16 +110,23 @@ def main(
 )
 @click.option(
     "--graph",
-    type=click.Choice(["flow", "call"]),
+    type=click.Choice(["flow", "call", "file"]),
     default="flow",
     show_default=True,
-    help="Which graph to emit for --format dot/sql: PERFORM control-flow or CALL dependencies",
+    help="Which graph to emit for --format dot/sql: PERFORM control-flow, CALL dependencies, or file access",
 )
 @click.option("--indent", type=int, default=2, show_default=True, help="JSON indentation spaces")
 @click.option(
     "--fixed/--free",
     default=None,
     help="Force fixed-format (cols 1-72) or free-format parsing",
+)
+@click.option(
+    "--copybook-dir",
+    "copybook_dirs",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Directory to search for copybooks referenced by FILE SECTION FD entries (repeatable)",
 )
 def proc_main(
     input_file: str,
@@ -128,12 +135,14 @@ def proc_main(
     graph: str,
     indent: int,
     fixed: bool | None,
+    copybook_dirs: tuple[str, ...],
 ) -> None:
-    """Analyze COBOL PROCEDURE DIVISION: PERFORM control-flow and CALL dependency graphs.
+    """Analyze COBOL PROCEDURE DIVISION: PERFORM control-flow, CALL dependency, and file access graphs.
 
     Reads COBOL source from INPUT_FILE (or stdin with -) and writes the
     requested representation to stdout or --output. Only the most common
-    forms of PERFORM, SECTION and CALL statements are recognized.
+    forms of PERFORM, SECTION, CALL, and READ/WRITE/REWRITE/DELETE/START
+    statements are recognized.
     """
     try:
         if input_file == "-":
@@ -142,7 +151,7 @@ def proc_main(
             with open(input_file, encoding="utf-8") as f:
                 text = f.read()
 
-        proc = parse_proc(text, fixed_format=fixed)
+        proc = parse_proc(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
 
         if output_format == "json":
             result = to_proc_json(proc, indent=indent)

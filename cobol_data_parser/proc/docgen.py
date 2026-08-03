@@ -14,8 +14,9 @@ recognized.
 from __future__ import annotations
 
 from .depgraph import build_call_graph
+from .fileaccess import build_file_access_graph
 from .flow import build_flow_graph
-from .models import BranchCond, CallStmt, GoToStmt, PerformStmt, ProcedureDivision
+from .models import BranchCond, CallStmt, FileDescriptor, GoToStmt, PerformStmt, ProcedureDivision
 
 
 def _branch_suffix(branch_path: list[BranchCond]) -> str:
@@ -23,6 +24,12 @@ def _branch_suffix(branch_path: list[BranchCond]) -> str:
         return ""
     label = " / ".join(f"{b.kind}: {b.text}" for b in branch_path)
     return f" [{label}]"
+
+
+def _file_descriptor_cell(fd: FileDescriptor) -> tuple[str, str, str, str]:
+    keys = [fd.record_key] if fd.record_key else []
+    keys += fd.alternate_record_keys
+    return (fd.name, fd.organization or "", fd.access_mode or "", ", ".join(keys))
 
 
 def _perform_cell(stmt: PerformStmt) -> str:
@@ -75,5 +82,24 @@ def to_markdown_spec(proc: ProcedureDivision) -> str:
     call_edges = build_call_graph(proc)
     lines += [f"- {source} → {target}" for source, target in call_edges] or ["(なし)"]
     lines.append("")
+
+    lines += ["## ファイルアクセス", ""]
+    if proc.files:
+        lines += ["| ファイル名 | ORGANIZATION | ACCESS MODE | キー |", "|---|---|---|---|"]
+        for fd in proc.files:
+            name, org, access, keys = _file_descriptor_cell(fd)
+            lines.append(f"| {name} | {org} | {access} | {keys} |")
+        lines.append("")
+
+    file_edges = build_file_access_graph(proc)
+    if file_edges:
+        lines += ["| 段落 | 操作 | ファイル | 分岐 |", "|---|---|---|---|"]
+        for e in file_edges:
+            branch = _branch_suffix(e.branch_path).strip(" []")
+            lines.append(f"| {e.paragraph} | {e.operation} | {e.file_name} | {branch} |")
+        lines.append("")
+    elif not proc.files:
+        lines.append("(なし)")
+        lines.append("")
 
     return "\n".join(lines)
