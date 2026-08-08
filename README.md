@@ -17,7 +17,10 @@ COBOL モダナイゼーションの第一歩は、データ構造とロジッ�
   DATA DIVISION の FILE SECTION（`FD`）を読み取って**ファイルアクセス解析**（VSAM の
   `ORGANIZATION IS INDEXED` を含む）を行い、「どの段落が・どの条件分岐で・どのファイルに
   READ/WRITE/REWRITE/DELETE/STARTを行うか」を JSON / Graphviz DOT / SQL / Python の
-  各形式で出力します。
+  各形式で出力します。さらに`MOVE`/`ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE`/`COMPUTE`/
+  `ACCEPT`/`DISPLAY`から段落ごとの読み書きデータ項目を集計し、**自然文のIPO
+  （Input-Process-Output）仕様書**をMarkdownで生成します（テンプレート方式は追加
+  依存なし、LLM方式はAnthropic API連携でより自然な文章に整形）。
 
 ## 使用例
 
@@ -102,6 +105,32 @@ cobol-data-parser --format openapi customer.cob
 `sql-ddl` / `typescript` / `openapi` は `emit()` の JSON メタデータ形状ではなく、
 `decode_record()` が実際に返す**デコード後の値の形**を反映します（詳細は後述の
 「SQL DDL / TypeScript / OpenAPI 生成」を参照）。
+
+### パースエンジン（regex / antlr4）
+
+`cobol-data-parser` / `cobol-proc-parser` は `--engine` で2つのパースエンジンを
+切り替えられます。どちらも同じ `DataItem` / `ProcedureDivision` を出力するため、
+`--format`/`--graph` などの下流処理は engine を変えても同じように動作します。
+
+| | `--engine regex`（デフォルト） | `--engine antlr4` |
+|---|---|---|
+| 実装方式 | 正規表現＋行スキャン | [grammars-v4 `cobol85`](https://github.com/antlr/grammars-v4/tree/master/cobol85) ベースのANTLR4文法 |
+| 追加依存 | なし | `pip install cobol-data-parser[antlr4]`（`antlr4-python3-runtime`） |
+| `--fixed`/`--free` | 対応 | 非対応（常に自由形式として解析） |
+| `GO TO a b c DEPENDING ON x` | 先頭ターゲットのみ | 全ターゲットを解決（`GoToStmt.targets`/`depending_on`） |
+| `PERFORM ... VARYING/UNTIL` インラインループ | ループ内の文は検出するがループに属する事実は記録しない | `branch_path` に `PERFORM-VARYING`/`PERFORM-UNTIL` として記録 |
+| `COPY`/`REPLACING` 展開範囲 | DATA DIVISION全体、および PROCEDURE DIVISION は FILE SECTION FD エントリのみ | ソース中のどこでも展開（PROCEDURE DIVISION本文中のCOPYも展開） |
+
+```bash
+# DATA DIVISIONをANTLR4文法で解析
+cobol-data-parser --engine antlr4 customer.cob
+
+# PROCEDURE DIVISIONをANTLR4文法で解析（本文中のCOPYも展開）
+cobol-proc-parser --engine antlr4 --copybook-dir ./copybooks program.cob
+```
+
+antlr4 エンジンの文法ソース（`.g4`）は `cobol_data_parser/antlr_engine/grammar/` にあり、
+`./regenerate_antlr_grammar.sh` で再生成できます（`antlr4-tools` と Java 11+ が必要）。
 
 ### Python API
 
@@ -546,6 +575,13 @@ cobol-proc-parser --format python main.cob
 # プログラム仕様書（Markdown）として出力
 cobol-proc-parser --format spec main.cob
 
+# 自然文IPO仕様書（Markdown、テンプレート方式・追加依存なし）として出力
+cobol-proc-parser --format ipo main.cob
+
+# 自然文IPO仕様書をLLM（Anthropic API）で整形して出力
+# 事前に `pip install cobol-data-parser[llm]` と ANTHROPIC_API_KEY の設定が必要
+cobol-proc-parser --format ipo --render llm main.cob
+
 # FILE SECTION 内の COPY を展開する場合
 cobol-proc-parser --copybook-dir ./copybooks main.cob
 ```
@@ -573,8 +609,55 @@ spec_md = to_markdown_spec(proc)     # 段落一覧・制御フロー・外部�
 
 `to_markdown_spec()`（CLI: `--format spec`）は、段落一覧（PERFORM/CALL/GO TO付き）・
 制御フローグラフ・CALL依存関係グラフをまとめた構造的なMarkdown文書を生成します。
-どのデータ項目を読み書きしているかまでは追跡していないため、自然文によるIPO
-（Input-Process-Output）の説明文書ではなく、**構造の一覧**である点に注意してください。
+自然文によるIPO説明文書ではなく、**構造の一覧**である点に注意してください（自然文の
+IPO仕様書は次項の`to_markdown_ipo()`）。
+
+### 自然文IPO仕様書生成
+
+`to_markdown_ipo()`（CLI: `--format ipo`）は、`MOVE`/`ADD`/`SUBTRACT`/`MULTIPLY`/
+`DIVIDE`/`COMPUTE`/`ACCEPT`/`DISPLAY`文から段落ごとに読み書きしたデータ項目を
+機械的に集計し（`build_dataflow_facts()`、`proc/dataflow.py`）、段落単位で
+「入力」「処理」「出力」（IPO）をまとめたMarkdown文書を生成します。制御フロー
+（PERFORM/CALL/GO TO）とファイルアクセスは`to_markdown_spec()`側に既にあるため、
+ここでは繰り返しません。データ操作文が1つもない段落（制御フローだけの段落など）は
+出力から省かれます。
+
+```python
+from cobol_data_parser.proc import parse
+from cobol_data_parser.proc.docgen import to_markdown_ipo
+
+proc = parse(cobol_source)
+ipo_md = to_markdown_ipo(proc)               # render="template"（デフォルト、追加依存なし）
+ipo_md = to_markdown_ipo(proc, render="llm")  # 事実をLLMに渡して自然な文章に整形
+```
+
+`render`は2種類選択できます。
+
+- **`"template"`（デフォルト）**: 定型の日本語文（例:「WS-A を WS-B に転記する。」）
+  に機械的に変換します。追加依存なし、常にオフラインで動作します。
+- **`"llm"`**: 段落ごとに抽出済みの決定論的な事実（入力・出力・テンプレート文）
+  だけをAnthropic API（1段落＝1回の小さな呼び出し。プログラム全体を一度に
+  投げないため、プログラムサイズに関わらずコンテキスト長の問題が起きません）
+  に渡し、より自然な文章に書き直させます。「入力」「出力」の一覧そのものは
+  どちらのモードでも常に決定論的な事実であり、LLMは「処理」の文章表現だけを
+  担当します。`pip install cobol-data-parser[llm]`（`anthropic`/`python-dotenv`）
+  と`ANTHROPIC_API_KEY`の設定が必要です（未インストール時は`pip install`を促す
+  `ImportError`）。
+
+  APIキーは環境変数として`export`する他、リポジトリ直下に`.env`ファイルを置く
+  ことでも設定できます（`../mainframe-kotlin`と同じ`.env`/`.env.example`の
+  流儀。`.env`は`.gitignore`済みでコミットされません）。
+
+  ```bash
+  cp .env.example .env
+  # .env を編集して ANTHROPIC_API_KEY=sk-ant-... を記入
+  cobol-proc-parser --format ipo --render llm main.cob
+  ```
+
+**スコープ外**: `INITIALIZE`/`SET`/`STRING`/`UNSTRING`文は対象外です。`COMPUTE`の
+右辺式は評価されず、式中の識別子っぽいトークンを抽出するだけです（`PERFORM
+... UNTIL`の条件式と同じ「存在だけ記録」の扱い）。ZERO/SPACESなどの表意定数は
+実在するデータ項目と区別できないため、入力候補として誤って現れることがあります。
 
 ### ファイルアクセス解析（VSAM/順編成ファイル）
 
@@ -626,8 +709,13 @@ pytest
   ベストエフォートで処理されるだけ）。
 - **`PERFORM ... UNTIL` の条件式パース** — 現在はUNTIL句の有無のみ記録し、条件式本体は未解析。
 - **`GO TO a b c DEPENDING ON x`（複数ターゲット）対応** — 現在は単一ターゲットのGO TOのみ対応。
-- **自然文IPO仕様書生成** — `to_markdown_spec()` は構造（段落・制御フロー・CALL依存）の一覧に
-  留まる。データ項目の読み書き追跡を伴う自然文の処理概要・IPO文書化は別途大きな機能。
+- **`INITIALIZE`/`SET`/`STRING`/`UNSTRING`のデータフロー対応** — `to_markdown_ipo()`の
+  読み書き追跡は`MOVE`/`ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE`/`COMPUTE`/`ACCEPT`/`DISPLAY`
+  のみが対象。これらの文は今のところ一切モデル化されていない。
+- **`COMPUTE`式の構造化パース** — 現状は右辺式中の識別子っぽいトークンを抽出するだけで、
+  演算子や優先順位、リテラルとの区別は行わない。
+- **表意定数の識別子との区別** — `ZERO`/`SPACES`/`HIGH-VALUES`などの表意定数を実在の
+  データ項目と区別する手段がなく、`to_markdown_ipo()`の入力候補に誤って現れることがある。
 - **フルプログラム入力対応** — COBOL ソースファイル全体から DATA DIVISION を自動的に抽出（FILE SECTION の FD 記述子を含む）。
 - **IBM 16進浮動小数点** — `COMP-1`/`COMP-2` は現在 IEEE754 のみ対応。IBM 独自の16進浮動小数点形式は未対応。
 - **SQL DDL の子テーブルFK配線** — OCCURS由来の子テーブルの `_PARENT_ID` は現状プレース

@@ -9,7 +9,7 @@ from .data.parser import parse
 from .data.sql_gen import to_sql_ddl
 from .data.ts_gen import to_typescript
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 __all__ = [
     "parse",
     "emit",

@@ -57,14 +57,20 @@ class CallStmt:
 class GoToStmt:
     """A GO TO <target> statement.
 
-    Only the single-target form is recognized — the older
-    'GO TO a b c DEPENDING ON x' multi-target form is not supported.
+    The regex engine (parser.py) only recognizes the single-target form, so
+    `target` is always its sole target and `targets`/`depending_on` stay
+    None. The ANTLR4 engine (antlr_engine/) also understands the older
+    'GO TO a b c DEPENDING ON x' multi-target form: `targets` then holds all
+    of them (with `target` == targets[0] for backward compatibility) and
+    `depending_on` holds the DEPENDING ON identifier.
 
     `branch_path` — see PerformStmt.
     """
 
     target: str
     branch_path: list[BranchCond] = field(default_factory=list)
+    targets: list[str] | None = None
+    depending_on: str | None = None
 
 
 @dataclass
@@ -88,6 +94,74 @@ class IoStmt:
 
     operation: str
     target: str
+    branch_path: list[BranchCond] = field(default_factory=list)
+
+
+@dataclass
+class MoveStmt:
+    """A MOVE <source> TO <target1> [<target2> ...] statement.
+
+    `source` is the raw sending identifier or literal as written (quoted
+    literals keep their surrounding quotes so they're distinguishable from
+    identifiers by IPO rendering). `targets` lists every receiving
+    identifier — MOVE supports multiple TO targets. MOVE CORRESPONDING is
+    not decomposed into per-field moves; `corresponding` just records
+    whether the keyword was present.
+
+    `branch_path` — see PerformStmt.
+    """
+
+    source: str
+    targets: list[str] = field(default_factory=list)
+    corresponding: bool = False
+    branch_path: list[BranchCond] = field(default_factory=list)
+
+
+@dataclass
+class ArithmeticStmt:
+    """An ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE statement.
+
+    `operation` is one of "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE".
+    `operands` are the identifiers/literals read (for COMPUTE, every
+    identifier-shaped token found in the right-hand expression — the
+    expression itself isn't parsed, same "presence, not structure" treatment
+    as PerformStmt.until). `targets` are the identifiers written: the GIVING
+    target(s) when present, otherwise the TO/FROM/BY/INTO operand(s) that
+    COBOL updates in place (e.g. plain `ADD A TO B` writes B).
+
+    `branch_path` — see PerformStmt.
+    """
+
+    operation: str
+    operands: list[str] = field(default_factory=list)
+    targets: list[str] = field(default_factory=list)
+    branch_path: list[BranchCond] = field(default_factory=list)
+
+
+@dataclass
+class AcceptStmt:
+    """An ACCEPT <target> [FROM <source>] statement.
+
+    `from_source` holds the raw FROM operand (an environment-name like DATE/
+    TIME/DAY or a mnemonic-name) when present, verbatim and unvalidated.
+
+    `branch_path` — see PerformStmt.
+    """
+
+    target: str
+    from_source: str | None = None
+    branch_path: list[BranchCond] = field(default_factory=list)
+
+
+@dataclass
+class DisplayStmt:
+    """A DISPLAY <item1> [<item2> ...] statement. `items` keeps identifiers
+    and quoted literals as written, in order.
+
+    `branch_path` — see PerformStmt.
+    """
+
+    items: list[str] = field(default_factory=list)
     branch_path: list[BranchCond] = field(default_factory=list)
 
 
@@ -120,6 +194,10 @@ class Paragraph:
     calls: list[CallStmt] = field(default_factory=list)
     go_tos: list[GoToStmt] = field(default_factory=list)
     io_statements: list[IoStmt] = field(default_factory=list)
+    moves: list[MoveStmt] = field(default_factory=list)
+    arithmetic: list[ArithmeticStmt] = field(default_factory=list)
+    accepts: list[AcceptStmt] = field(default_factory=list)
+    displays: list[DisplayStmt] = field(default_factory=list)
 
 
 @dataclass

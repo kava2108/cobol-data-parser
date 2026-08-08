@@ -4,7 +4,19 @@ import re
 
 from ..common.lexer import preprocess
 from .environment import parse_file_descriptors
-from .models import BranchCond, CallStmt, GoToStmt, IoStmt, Paragraph, PerformStmt, ProcedureDivision
+from .models import (
+    AcceptStmt,
+    ArithmeticStmt,
+    BranchCond,
+    CallStmt,
+    DisplayStmt,
+    GoToStmt,
+    IoStmt,
+    MoveStmt,
+    Paragraph,
+    PerformStmt,
+    ProcedureDivision,
+)
 
 _PROGRAM_ID_RE = re.compile(r"^PROGRAM-ID\.\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 _PROCEDURE_DIVISION_RE = re.compile(r"^PROCEDURE\s+DIVISION\b.*\.$", re.IGNORECASE)
@@ -46,15 +58,21 @@ _SCOPE_TERMINATORS = {
 # Negative lookahead excludes the inline-loop forms 'PERFORM UNTIL ...' and
 # 'PERFORM VARYING ...' (no paragraph target — a target-less in-line PERFORM
 # isn't a control-flow edge to anything).
+#
+# Lookaround-bounded, not \b: their own scope terminators (END-PERFORM,
+# END-CALL) end with the same word, and \b treats '-' as a non-word
+# character -- \bPERFORM\b would match the 'PERFORM' inside 'END-PERFORM
+# GO TO X' and capture 'GO' as a bogus target (same failure mode the
+# READ/WRITE/REWRITE/DELETE/START patterns below are already guarded against).
 _PERFORM_RE = re.compile(
-    r"\bPERFORM\s+(?!UNTIL\b|VARYING\b|WITH\b)([A-Z0-9][A-Z0-9-]*)"
+    r"(?<![A-Z0-9-])PERFORM\s+(?!UNTIL\b|VARYING\b|WITH\b)([A-Z0-9][A-Z0-9-]*)"
     r"(?:\s+(?:THRU|THROUGH)\s+([A-Z0-9][A-Z0-9-]*))?"
     r"(?:\s+VARYING\s+([A-Z0-9][A-Z0-9-]*))?",
     re.IGNORECASE,
 )
 _UNTIL_RE = re.compile(r"\bUNTIL\b", re.IGNORECASE)
 _CALL_RE = re.compile(
-    r"""\bCALL\s+(?:'([^']*)'|"([^"]*)"|([A-Z0-9][A-Z0-9-]*))""", re.IGNORECASE
+    r"""(?<![A-Z0-9-])CALL\s+(?:'([^']*)'|"([^"]*)"|([A-Z0-9][A-Z0-9-]*))""", re.IGNORECASE
 )
 _GOTO_RE = re.compile(r"\bGO\s+TO\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 
@@ -95,13 +113,45 @@ _IO_PATTERNS = (
 # _split_branches below.
 _STATEMENT_BOUNDARY_RE = re.compile(
     r"(?<![A-Z0-9-])(?:PERFORM|CALL|DISPLAY|MOVE|IF|END-CALL|GO\s+TO|COMPUTE|ADD|SUBTRACT|"
-    r"EVALUATE|STOP\s+RUN|READ|WRITE|REWRITE|DELETE|START)(?![A-Z0-9-])",
+    r"MULTIPLY|DIVIDE|ACCEPT|EVALUATE|STOP\s+RUN|READ|WRITE|REWRITE|DELETE|START)(?![A-Z0-9-])",
     re.IGNORECASE,
 )
 _USING_RE = re.compile(r"\bUSING\s+(.+?)(?=\bRETURNING\b|$)", re.IGNORECASE | re.DOTALL)
 _RETURNING_RE = re.compile(r"\bRETURNING\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 _BY_QUALIFIER_RE = re.compile(r"\bBY\s+(?:REFERENCE|CONTENT|VALUE)\b", re.IGNORECASE)
 _ARG_TOKEN_RE = re.compile(r"[A-Z0-9][A-Z0-9-]*")
+
+# MOVE [CORRESPONDING] <source> TO <target1> [<target2> ...]. `source` is
+# either a quoted literal (group 2/3, quotes stripped) or an identifier
+# (group 4); the TO target list is extracted from the bounded clause text
+# after the match, same as CALL's USING list.
+_MOVE_RE = re.compile(
+    r"(?<![A-Z0-9-])MOVE\s+(?:(CORRESPONDING|CORR)\s+)?"
+    r"(?:'([^']*)'|\"([^\"]*)\"|([A-Z0-9][A-Z0-9-]*))\s+TO\b",
+    re.IGNORECASE,
+)
+
+# ADD/SUBTRACT/MULTIPLY/DIVIDE/COMPUTE keyword anchors -- operand/target
+# extraction happens in _arith_operands_targets() / the COMPUTE block below,
+# scanning the bounded clause text the same way _call_using_returning() does.
+_ADD_RE = re.compile(r"(?<![A-Z0-9-])ADD\s+", re.IGNORECASE)
+_SUBTRACT_RE = re.compile(r"(?<![A-Z0-9-])SUBTRACT\s+", re.IGNORECASE)
+_MULTIPLY_RE = re.compile(r"(?<![A-Z0-9-])MULTIPLY\s+", re.IGNORECASE)
+_DIVIDE_RE = re.compile(r"(?<![A-Z0-9-])DIVIDE\s+", re.IGNORECASE)
+_COMPUTE_RE = re.compile(r"(?<![A-Z0-9-])COMPUTE\s+", re.IGNORECASE)
+
+_GIVING_RE = re.compile(r"\bGIVING\s+(.+)", re.IGNORECASE | re.DOTALL)
+_REMAINDER_RE = re.compile(r"\bREMAINDER\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_TO_SEP_RE = re.compile(r"\bTO\b", re.IGNORECASE)
+_FROM_SEP_RE = re.compile(r"\bFROM\b", re.IGNORECASE)
+_BY_SEP_RE = re.compile(r"\bBY\b", re.IGNORECASE)
+_INTO_OR_BY_SEP_RE = re.compile(r"\b(?:INTO|BY)\b", re.IGNORECASE)
+
+_ACCEPT_RE = re.compile(r"(?<![A-Z0-9-])ACCEPT\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+_ACCEPT_FROM_RE = re.compile(r"\bFROM\s+([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
+
+_DISPLAY_RE = re.compile(r"(?<![A-Z0-9-])DISPLAY\s+", re.IGNORECASE)
+_DISPLAY_ITEM_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"|([A-Z0-9][A-Z0-9-]*)", re.IGNORECASE)
 
 # Structural keywords that delimit IF/EVALUATE nesting for _split_branches.
 # Same lookaround-boundary rationale as _STATEMENT_BOUNDARY_RE above. Longer
@@ -155,6 +205,58 @@ def _call_using_returning(text: str, call_end: int) -> tuple[list[str], str | No
         returning = m_returning.group(1).upper()
 
     return using, returning
+
+
+def _arith_operands_targets(clause: str, sep_re: re.Pattern[str]) -> tuple[list[str], list[str]]:
+    """Split an ADD/SUBTRACT/MULTIPLY/DIVIDE clause into (operands, targets).
+
+    With a GIVING clause, everything before GIVING is read (`operands`) and
+    the GIVING identifier(s) are written (`targets`); DIVIDE's REMAINDER
+    target (if present) is stripped out of the GIVING token list and added
+    to `targets` separately, since REMAINDER's own name would otherwise be
+    mistaken for a target identifier by the token scan.
+
+    Without GIVING, `sep_re` (TO for ADD, FROM for SUBTRACT, BY for
+    MULTIPLY, INTO/BY for DIVIDE) marks where the in-place-updated
+    identifier(s) start -- COBOL both reads and writes them, but this tool
+    only records the write side, matching IoStmt's "target it touches"
+    treatment.
+    """
+    giving_m = _GIVING_RE.search(clause)
+    if giving_m:
+        # e.g. "ADD X TO Y GIVING Z" -- the TO/FROM/BY/INTO separator can
+        # appear *before* GIVING too (combined form), so it must be
+        # stripped here or it would be mistaken for an operand token.
+        before = sep_re.sub(" ", clause[: giving_m.start()])
+        giving_text = giving_m.group(1)
+        remainder_m = _REMAINDER_RE.search(giving_text)
+        if remainder_m:
+            targets = [t.upper() for t in _ARG_TOKEN_RE.findall(giving_text[: remainder_m.start()])]
+            targets.append(remainder_m.group(1).upper())
+        else:
+            targets = [t.upper() for t in _ARG_TOKEN_RE.findall(giving_text)]
+    else:
+        sep_m = sep_re.search(clause)
+        if not sep_m:
+            return [], []
+        before = clause[: sep_m.start()]
+        targets = [t.upper() for t in _ARG_TOKEN_RE.findall(clause[sep_m.end() :])]
+
+    operands = [t.upper() for t in _ARG_TOKEN_RE.findall(before)]
+    return operands, targets
+
+
+def _display_items(clause: str) -> list[str]:
+    items: list[str] = []
+    for m in _DISPLAY_ITEM_RE.finditer(clause):
+        single, double, ident = m.groups()
+        if single is not None:
+            items.append(f"'{single}'")
+        elif double is not None:
+            items.append(f'"{double}"')
+        else:
+            items.append(ident.upper())
+    return items
 
 
 def _split_branches(text: str) -> list[tuple[str, list[BranchCond]]]:
@@ -298,6 +400,59 @@ def _scan_segment(para: Paragraph, text: str, branch_path: list[BranchCond]) -> 
                 IoStmt(operation=operation, target=m.group(1).upper(), branch_path=branch_path)
             )
 
+    for m in _MOVE_RE.finditer(text):
+        single, double, ident = m.group(2), m.group(3), m.group(4)
+        if single is not None:
+            source = f"'{single}'"
+        elif double is not None:
+            source = f'"{double}"'
+        else:
+            source = ident.upper()
+        targets = [t.upper() for t in _ARG_TOKEN_RE.findall(_clause_text(text, m.end()))]
+        para.moves.append(
+            MoveStmt(source=source, targets=targets, corresponding=bool(m.group(1)), branch_path=branch_path)
+        )
+
+    for operation, kw_re, sep_re in (
+        ("ADD", _ADD_RE, _TO_SEP_RE),
+        ("SUBTRACT", _SUBTRACT_RE, _FROM_SEP_RE),
+        ("MULTIPLY", _MULTIPLY_RE, _BY_SEP_RE),
+        ("DIVIDE", _DIVIDE_RE, _INTO_OR_BY_SEP_RE),
+    ):
+        for m in kw_re.finditer(text):
+            operands, targets = _arith_operands_targets(_clause_text(text, m.end()), sep_re)
+            if operands or targets:
+                para.arithmetic.append(
+                    ArithmeticStmt(operation=operation, operands=operands, targets=targets, branch_path=branch_path)
+                )
+
+    for m in _COMPUTE_RE.finditer(text):
+        clause = _clause_text(text, m.end())
+        eq_idx = clause.find("=")
+        if eq_idx == -1:
+            continue
+        targets = [t.upper() for t in _ARG_TOKEN_RE.findall(clause[:eq_idx])]
+        operands = [t.upper() for t in _ARG_TOKEN_RE.findall(clause[eq_idx + 1 :])]
+        para.arithmetic.append(
+            ArithmeticStmt(operation="COMPUTE", operands=operands, targets=targets, branch_path=branch_path)
+        )
+
+    for m in _ACCEPT_RE.finditer(text):
+        clause = _clause_text(text, m.end())
+        from_m = _ACCEPT_FROM_RE.search(clause)
+        para.accepts.append(
+            AcceptStmt(
+                target=m.group(1).upper(),
+                from_source=from_m.group(1).upper() if from_m else None,
+                branch_path=branch_path,
+            )
+        )
+
+    for m in _DISPLAY_RE.finditer(text):
+        items = _display_items(_clause_text(text, m.end()))
+        if items:
+            para.displays.append(DisplayStmt(items=items, branch_path=branch_path))
+
 
 def _scan_statements(name: str, section: str | None, text: str) -> Paragraph:
     para = Paragraph(name=name, section=section)
@@ -313,16 +468,22 @@ def parse(
 ) -> ProcedureDivision:
     """Parse a COBOL source's ENVIRONMENT DIVISION/DATA DIVISION file
     declarations and PROCEDURE DIVISION SECTIONs, paragraphs, and their
-    PERFORM/CALL/GO TO/READ/WRITE/REWRITE/DELETE/START statements.
+    PERFORM/CALL/GO TO/READ/WRITE/REWRITE/DELETE/START/MOVE/ADD/SUBTRACT/
+    MULTIPLY/DIVIDE/COMPUTE/ACCEPT/DISPLAY statements.
 
     Only the most common forms are recognized: PERFORM with an optional THRU
     range and VARYING identifier (the UNTIL condition's presence is noted,
     not its expression text), literal or identifier CALL targets with USING/
     RETURNING, single-target GO TO, and READ/WRITE/REWRITE/DELETE/START each
     with their file- or record-name target (see IoStmt in models.py — AT
-    END/INVALID KEY clauses aren't modeled as branches). Statements are
-    found by scanning each paragraph's text with regexes rather than a real
-    COBOL statement grammar.
+    END/INVALID KEY clauses aren't modeled as branches). MOVE/ADD/SUBTRACT/
+    MULTIPLY/DIVIDE/ACCEPT/DISPLAY record which identifiers each statement
+    reads and writes (see ArithmeticStmt/MoveStmt/AcceptStmt/DisplayStmt in
+    models.py) but not the semantics of a COMPUTE expression itself — only
+    the identifier-shaped tokens found in it; INITIALIZE/SET/STRING/UNSTRING
+    aren't recognized at all. Statements are found by scanning each
+    paragraph's text with regexes rather than a real COBOL statement
+    grammar.
 
     Statements nested inside IF/ELSE or EVALUATE/WHEN blocks carry a
     `branch_path` (see BranchCond in models.py) recording which branch(es)

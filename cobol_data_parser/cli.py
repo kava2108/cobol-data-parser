@@ -8,12 +8,39 @@ from . import __version__
 from .data.docgen import to_markdown_table
 from .data.emitter import to_json
 from .data.openapi_gen import to_openapi_json
-from .data.parser import parse
+from .data.parser import parse as parse_regex
 from .data.sql_gen import to_sql_ddl
 from .data.ts_gen import to_typescript
-from .proc.docgen import to_markdown_spec
+from .proc.docgen import to_markdown_ipo, to_markdown_spec
 from .proc.emitter import to_dot, to_json as to_proc_json, to_python, to_sql
-from .proc.parser import parse as parse_proc
+from .proc.parser import parse as parse_proc_regex
+
+_ENGINE_OPTION = click.option(
+    "--engine",
+    type=click.Choice(["regex", "antlr4"]),
+    default="regex",
+    show_default=True,
+    help=(
+        "Parsing engine: 'regex' is the built-in line-scanner (fast, no extra "
+        "dependency, --fixed/--free applies). 'antlr4' uses a real COBOL grammar "
+        "(grammars-v4 cobol85) -- needs `pip install cobol-data-parser[antlr4]`; "
+        "always free-format, --fixed/--free is ignored; COPY/REPLACING is expanded "
+        "anywhere in the source (not just FILE SECTION FD entries)."
+    ),
+)
+
+_RENDER_OPTION = click.option(
+    "--render",
+    type=click.Choice(["template", "llm"]),
+    default="template",
+    show_default=True,
+    help=(
+        "Only affects --format ipo: 'template' renders mechanical Japanese sentences "
+        "with no extra dependency; 'llm' sends each paragraph's already-extracted "
+        "facts (never raw source) to an LLM for more natural prose -- needs "
+        "`pip install cobol-data-parser[llm]` and an ANTHROPIC_API_KEY."
+    ),
+)
 
 
 @click.command()
@@ -46,6 +73,7 @@ from .proc.parser import parse as parse_proc
     type=click.Path(exists=True, file_okay=False),
     help="Directory to search for copybooks (repeatable)",
 )
+@_ENGINE_OPTION
 def main(
     input_file: str,
     output: str | None,
@@ -53,6 +81,7 @@ def main(
     indent: int,
     fixed: bool | None,
     copybook_dirs: tuple[str, ...],
+    engine: str,
 ) -> None:
     """Convert COBOL DATA DIVISION to JSON (or a Markdown definition table).
 
@@ -69,7 +98,11 @@ def main(
             with open(input_file, encoding="utf-8") as f:
                 text = f.read()
 
-        items = parse(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
+        if engine == "antlr4":
+            from .antlr_engine import parse as parse_antlr
+            items = parse_antlr(text, copybook_dirs=list(copybook_dirs) or None)
+        else:
+            items = parse_regex(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
         if output_format == "markdown":
             result = to_markdown_table(items)
         elif output_format == "sql-ddl":
@@ -100,12 +133,13 @@ def main(
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["json", "dot", "sql", "python", "spec"]),
+    type=click.Choice(["json", "dot", "sql", "python", "spec", "ipo"]),
     default="json",
     show_default=True,
     help=(
         "Output format: JSON schema, Graphviz DOT, SQL INSERT statements, "
-        "Python pretty-print, or a Markdown program specification document"
+        "Python pretty-print, a Markdown program specification document, or a "
+        "natural-language IPO (Input-Process-Output) document (see --render)"
     ),
 )
 @click.option(
@@ -126,8 +160,11 @@ def main(
     "copybook_dirs",
     multiple=True,
     type=click.Path(exists=True, file_okay=False),
-    help="Directory to search for copybooks referenced by FILE SECTION FD entries (repeatable)",
+    help="Directory to search for copybooks (repeatable). With --engine regex, only "
+    "expanded within FILE SECTION FD entries; with --engine antlr4, expanded anywhere.",
 )
+@_ENGINE_OPTION
+@_RENDER_OPTION
 def proc_main(
     input_file: str,
     output: str | None,
@@ -136,13 +173,17 @@ def proc_main(
     indent: int,
     fixed: bool | None,
     copybook_dirs: tuple[str, ...],
+    engine: str,
+    render: str,
 ) -> None:
     """Analyze COBOL PROCEDURE DIVISION: PERFORM control-flow, CALL dependency, and file access graphs.
 
     Reads COBOL source from INPUT_FILE (or stdin with -) and writes the
-    requested representation to stdout or --output. Only the most common
-    forms of PERFORM, SECTION, CALL, and READ/WRITE/REWRITE/DELETE/START
-    statements are recognized.
+    requested representation to stdout or --output. With --engine regex
+    (default), only the most common forms of PERFORM, SECTION, CALL, and
+    READ/WRITE/REWRITE/DELETE/START statements are recognized, and 'GO TO a
+    b c DEPENDING ON x' only resolves its first target. --engine antlr4
+    parses the full grammar and resolves both.
     """
     try:
         if input_file == "-":
@@ -151,7 +192,11 @@ def proc_main(
             with open(input_file, encoding="utf-8") as f:
                 text = f.read()
 
-        proc = parse_proc(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
+        if engine == "antlr4":
+            from .antlr_engine import parse_proc as parse_proc_antlr
+            proc = parse_proc_antlr(text, copybook_dirs=list(copybook_dirs) or None)
+        else:
+            proc = parse_proc_regex(text, fixed_format=fixed, copybook_dirs=list(copybook_dirs) or None)
 
         if output_format == "json":
             result = to_proc_json(proc, indent=indent)
@@ -161,6 +206,8 @@ def proc_main(
             result = to_sql(proc, graph=graph)
         elif output_format == "spec":
             result = to_markdown_spec(proc)
+        elif output_format == "ipo":
+            result = to_markdown_ipo(proc, render=render)
         else:
             result = to_python(proc)
 
