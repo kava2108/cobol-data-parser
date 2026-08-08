@@ -25,6 +25,8 @@ def _emit_elementary(item: DataItem) -> dict:
             node["precision"] = item.pic.precision
         if item.pic.scale is not None:
             node["scale"] = item.pic.scale
+        if item.pic.edit_symbols:
+            node["edit_symbols"] = item.pic.edit_symbols
     if item.offset is not None:
         node["offset"] = item.offset
     if item.byte_length is not None:

@@ -200,3 +200,28 @@ def test_sign_is_trailing_without_separate():
     assert item.sign_leading is False
     assert item.sign_separate is False
     assert item.byte_length == 5
+
+
+def test_pic_with_embedded_decimal_point_not_truncated_at_terminator():
+    """PIC's own explicit decimal point (e.g. ZZZ,ZZ9.99) must not be
+    mistaken for the entry's terminating period."""
+    cobol = "01 REC.\n   05 AMT PIC ZZZ,ZZ9.99.\n"
+    item = parse(cobol)[0].children[0]
+    assert item.pic.category == PicCategory.NUMERIC_EDITED
+    assert item.pic.length == 10
+    assert item.pic.edit_symbols == ["Z", ",", "."]
+
+
+def test_pic_with_decimal_point_followed_by_other_clause():
+    cobol = "01 REC.\n   05 AMT PIC ZZZ,ZZ9.99 USAGE DISPLAY.\n"
+    item = parse(cobol)[0].children[0]
+    assert item.pic.length == 10
+    assert item.pic.edit_symbols == ["Z", ",", "."]
+
+
+def test_hyphenated_name_containing_pic_is_not_mistaken_for_keyword():
+    cobol = "01 REC.\n   05 CUST-PIC-CODE PIC X(5).\n"
+    item = parse(cobol)[0].children[0]
+    assert item.name == "CUST-PIC-CODE"
+    assert item.pic.category == PicCategory.STRING
+    assert item.pic.length == 5

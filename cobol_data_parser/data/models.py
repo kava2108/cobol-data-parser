@@ -25,6 +25,7 @@ class PicClause:
     length: Optional[int] = None
     precision: Optional[int] = None
     scale: Optional[int] = None
+    edit_symbols: Optional[list[str]] = None
 
 
 @dataclass

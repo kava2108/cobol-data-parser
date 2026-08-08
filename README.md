@@ -1,4 +1,4 @@
-# cobol-data-parser
+すすめて# cobol-data-parser
 
 COBOL の DATA DIVISION と PROCEDURE DIVISION を解析するツール群。
 
@@ -140,6 +140,11 @@ records = list(iter_records(items[0], raw))          # 固定長ファイル全�
 | 混合・編集型 | `"alphanumeric-edited"` / `"numeric-edited"` |
 
 `X(10)` のような繰り返し記法と `XXXXXXXXXX` のような明示的繰り返しの両方に対応しています。
+
+編集型（`"*-edited"`）は `length`（表示幅）に加え、含まれる編集記号を出現順・重複除去した
+`edit_symbols` に保持します。対応する編集記号は `Z`（ゼロ抑制）・`*`（チェック保護）・
+`B`（空白挿入）・`0`（ゼロ挿入）・`/`（スラッシュ挿入）・`,`（カンマ挿入）・`.`（小数点）・
+`+`/`-`（符号編集）・`CR`/`DB`（貸借記号）・`$`（通貨記号）です。
 
 ### USAGE 句
 

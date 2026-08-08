@@ -169,6 +169,7 @@ def _parse_entry(entry: str) -> DataItem | None:
             length=pic.length,
             precision=pic.precision,
             scale=pic.scale,
+            edit_symbols=pic.edit_symbols,
         )
 
     return DataItem(

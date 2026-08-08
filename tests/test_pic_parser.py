@@ -52,3 +52,34 @@ def test_raw_preserved():
 def test_mixed_falls_back_to_edited():
     p = parse_pic("X9")
     assert p.category == PicCategory.ALPHANUMERIC_EDITED
+
+
+@pytest.mark.parametrize(
+    "pic, expected_cat, expected_len, expected_symbols",
+    [
+        ("ZZZ,ZZ9.99", PicCategory.NUMERIC_EDITED, 10, ["Z", ",", "."]),
+        ("9,999", PicCategory.NUMERIC_EDITED, 5, [","]),
+        ("999-", PicCategory.NUMERIC_EDITED, 4, ["-"]),
+        ("999CR", PicCategory.NUMERIC_EDITED, 5, ["CR"]),
+        ("999DB", PicCategory.NUMERIC_EDITED, 5, ["DB"]),
+        ("***,**9", PicCategory.NUMERIC_EDITED, 7, ["*", ","]),
+        ("$$$,$$9.99", PicCategory.NUMERIC_EDITED, 10, ["$", ",", "."]),
+        ("BB999", PicCategory.NUMERIC_EDITED, 5, ["B"]),
+        ("999/99/99", PicCategory.NUMERIC_EDITED, 9, ["/"]),
+        ("XX0XX", PicCategory.ALPHANUMERIC_EDITED, 5, ["0"]),
+    ],
+)
+def test_edited_pictures_capture_symbols_and_width(pic, expected_cat, expected_len, expected_symbols):
+    p = parse_pic(pic)
+    assert p.category == expected_cat
+    assert p.length == expected_len
+    assert p.edit_symbols == expected_symbols
+
+
+def test_edit_symbol_alone_forces_numeric_edited():
+    """A pure-9 PIC with only insertion symbols (no Z/*) must not be
+    misclassified as plain NUMERIC — the comma makes it edited."""
+    p = parse_pic("9(3),999")
+    assert p.category == PicCategory.NUMERIC_EDITED
+    assert p.length == 7
+    assert p.edit_symbols == [","]
